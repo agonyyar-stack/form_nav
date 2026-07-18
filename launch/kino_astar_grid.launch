@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="uav_id" default="uav0" />
+  <node name="kino_astar_node" pkg="form_nav" type="kino_astar_node" output="screen">
+    <param name="grid_map/resolution" value="0.1" /> <!-- 栅格地图分辨率，单位 m/格 -->
+    <param name="grid_map/map_size_x" value="55.0" /> <!-- 地图 X 方向尺寸，单位 m -->
+    <param name="grid_map/map_size_y" value="55.0" /> <!-- 地图 Y 方向尺寸，单位 m -->
+    <param name="grid_map/map_size_z" value="3.0" /> <!-- 地图 Z 方向尺寸，单位 m -->
+    <param name="grid_map/local_update_range_x" value="40.0" /> <!-- X 方向局部地图更新范围 -->
+    <param name="grid_map/local_update_range_y" value="20.0" /> <!-- Y 方向局部地图更新范围 -->
+    <param name="grid_map/local_update_range_z" value="3.0" /> <!-- Z 方向局部地图更新范围 -->
+    <param name="grid_map/obstacles_inflation" value="0.099" /> <!-- 障碍物膨胀半径，单位 m -->
+    <param name="grid_map/local_map_margin" value="30" /> <!-- 局部地图边距，单位格数 -->
+    <param name="grid_map/ground_height" value="-0.01" /> <!-- 地面高度，低于此值视为地面 -->
+    <!-- local fusion: 基于深度图的占用概率融合参数 -->
+    <param name="grid_map/p_hit" value="0.65" /> <!-- 命中概率，射线终点处的占用概率 -->
+    <param name="grid_map/p_miss" value="0.35" /> <!-- 未命中概率，射线穿过处的空闲概率 -->
+    <param name="grid_map/p_min" value="0.12" /> <!-- 最小占用概率下限 -->
+    <param name="grid_map/p_max" value="0.90" /> <!-- 最大占用概率上限 -->
+    <param name="grid_map/p_occ" value="0.80" /> <!-- 判定为占据的占用概率阈值 -->
+    <param name="grid_map/min_ray_length" value="0.1" /> <!-- 射线投射最短有效距离，单位 m -->
+    <param name="grid_map/max_ray_length" value="4.5" /> <!-- 射线投射最长有效距离，单位 m -->
+    <param name="grid_map/virtual_ceil_height" value="2.5" /> <!-- 虚拟天花板高度，用于地图可视化截断 -->
+    <param name="grid_map/visualization_truncate_height" value="2.4" /> <!-- 可视化高度截断阈值 -->
+    <param name="grid_map/show_occ_time" value="false" /> <!-- 是否在终端打印占用更新耗时 -->
+    <param name="grid_map/pose_type" value="2" /> <!-- 位姿来源类型：1 为 PoseStamped，2 为 Odometry -->
+    <param name="grid_map/frame_id" value="world" /> <!-- 地图参考坐标系名称 -->
+
+    <!-- kino_astar parameters -->
+    <param name="kino_astar/rou_time" value="50.0"/> <!-- 控制状态转移代价中的输入惩罚权重 -->
+    <param name="kino_astar/lambda_heu" value="3.0"/> <!-- 调整启发式权重，影响搜索倾向 -->
+    <param name="kino_astar/allocated_node_num" value="100000"/> <!-- 允许分配的最大搜索节点数 -->
+    <param name="kino_astar/goal_tolerance" value="2.0"/> <!-- 终点接近阈值，决定何时认为到达目标 -->
+    <param name="kino_astar/time_step_size" value="0.03"/> <!-- 状态传播和采样的时间步长 -->
+    <param name="kino_astar/max_velocity" value="7.0"/> <!-- 速度上限 -->
+    <param name="kino_astar/max_accelration" value="10.0"/> <!-- 加速度上限 -->
+    <param name="kino_astar/acc_resolution" value="4.0"/> <!-- 加速度采样分辨率，影响扩展节点数量 -->
+    <param name="kino_astar/sample_tau" value="0.3"/> <!-- 每一步的扩展时间长度 -->
+
+    <!-- collision check type 1: kino_astar, 2: kino_se3 -->
+    <param name="kino_astar/collision_check_type" value="1"/> <!-- 选择碰撞检测方式：1 为基于栅格，2 为基于椭球体 -->
+    <!-- robot ellipsoid parameters -->
+    <param name="kino_se3/robot_r" value="0.4"/> <!-- 机器人椭球体半径，控制横向包络 -->
+    <param name="kino_se3/robot_h" value="0.1"/> <!-- 机器人椭球体高度，控制纵向包络 -->
+    <remap from="~local_cloud" to="/pcl_render_node/cloud"/><!-- 外部功能包发布,将收到的点云插入 PCL KdTree做椭球体-点云碰撞检查。 -->
+
+    <remap from="/grid_map/cloud" to="/map_generator/global_cloud"/>
+    <remap from="/grid_map/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>
+    <remap from="/kino_astar/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>
+  </node>
+
+</launch>

@@ -1,0 +1,36 @@
+<launch>
+    <arg name="uav_id" default="uav0" />
+    <!-- 启动DWA仿真节点 -->
+    <node pkg="form_nav" name="$(arg uav_id)_mpc_node"  type="mpc_node" output="screen">
+        <param name="sdf_map/resolution" value="0.1" />
+        <param name="sdf_map/map_size_x" value="40.0" />
+        <param name="sdf_map/map_size_y" value="20.0" />
+        <param name="sdf_map/map_size_z" value="3.0" />
+        <param name="sdf_map/local_update_range_x" value="5.0" />
+        <param name="sdf_map/local_update_range_y" value="5.0" />
+        <param name="sdf_map/local_update_range_z" value="3.0" />
+        <param name="sdf_map/obstacles_inflation" value="0.099" />
+        <param name="sdf_map/local_map_margin" value="30" />
+        <param name="sdf_map/ground_height" value="-0.01" />
+
+        <!-- local fusion -->
+        <param name="sdf_map/virtual_ceil_height" value="2.5" />
+        <param name="sdf_map/visualization_truncate_height" value="2.4" />
+        <param name="sdf_map/show_occ_time" value="false" />
+        <param name="sdf_map/pose_type" value="2" />
+        <param name="sdf_map/frame_id" value="map" />
+
+        <param name="my_id" value="0" />
+        <param name="is_tracked" value="true" />
+        <param name="tracking_model" value="1" />
+        <!-- <rosparam param="neighbor_ids">[1, 2]</rosparam> -->
+        <rosparam param="formation_offsets">
+          "0": [0, 0, 0, 0]
+        </rosparam>
+
+        <remap from="/sdf_map/cloud" to="/map_generator/global_cloud"/> 
+        <remap from="/sdf_map/occupancy_inflate" to="/$(arg uav_id)/sdf_map/occupancy_inflate"/>
+        <remap from="/sdf_map/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>
+    </node>
+
+</launch>

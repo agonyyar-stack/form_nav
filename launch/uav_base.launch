@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="uav_id" default="uav0" />
+
+  <!-- 解锁和模式切换 -->
+  <node pkg="form_nav" type="uav_base" name="$(arg uav_id)_uav_base" output="screen" >
+    <remap from="/mavros/state" to="/$(arg uav_id)/mavros/state" />
+    <remap from="/mavros/cmd/arming" to="/$(arg uav_id)/mavros/cmd/arming" />
+    <remap from="/mavros/set_mode" to="/$(arg uav_id)/mavros/set_mode" />
+    <remap from="/mavros/setpoint_position/local" to="/$(arg uav_id)/mavros/setpoint_position/local" />
+    <remap from="/mavros/setpoint_velocity/cmd_vel" to="/$(arg uav_id)/mavros/setpoint_velocity/cmd_vel" />
+  </node>
+
+</launch>

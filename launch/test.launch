@@ -1,0 +1,58 @@
+<launch>
+    <!-- gazebo -->
+    <include file="$(find form_nav)/launch/multi_uav_gazebo.launch" />
+
+    <!-- 静态障碍物地图生成 -->
+    <!-- pkg：指定哪个 ROS 包，type：包里要运行的可执行文件名，name：该节点启动后在 ROS 系统里注册的名字 -->
+    <node pkg="form_nav" type="random_static_obs" name="random_static_obs" output="screen" >
+        <param name="pattern" value="1" /> <!-- 1=静态(默认), 2=动态, 3=静+动 -->
+
+        <param name="map/x_size"     value="30.0" /> <!-- 地图的x轴大小 -->
+        <param name="map/y_size"     value="30.0" /> <!-- 地图的y轴大小 -->
+        <param name="map/z_size"     value="3" /> <!-- 地图的z轴大小 -->
+        <param name="map/resolution" value="0.1"/> <!-- 地图的分辨率为空间分辨率 -->
+
+        <param name="map/obs_num"    value="100"/> <!-- 障碍物的数量 -->
+        <param name="ObstacleShape/lower_rad" value="0.5"/> <!-- 障碍物的最小半径 -->
+        <param name="ObstacleShape/upper_rad" value="0.7"/> <!-- 障碍物的最大半径 -->
+        <param name="ObstacleShape/lower_hei" value="0.0"/> <!-- 障碍物的最小高度 -->
+        <param name="ObstacleShape/upper_hei" value="3.0"/> <!-- 障碍物的最大高度 -->
+
+        <param name="map/circle_num" value="100"/> <!-- 圆形障碍物的数量 -->
+        <param name="ObstacleShape/radius_l" value="0.7"/> <!-- 圆形障碍物的最小半径 -->
+        <param name="ObstacleShape/radius_h" value="0.5"/> <!-- 圆形障碍物的最大半径 -->
+        <param name="ObstacleShape/z_l" value="0.7"/> <!-- 圆形障碍物的最小高度 -->
+        <param name="ObstacleShape/z_h" value="0.8"/> <!-- 圆形障碍物的最大高度 -->
+        <param name="ObstacleShape/theta" value="0.5"/> <!-- 圆形障碍物的旋转角度 -->
+
+        <param name="min_distance" value="1.2"/> <!-- 障碍物最小间距 -->
+
+        <param name="dyn_obs/num" value="20" />
+        <param name="dyn_obs/size" value="0.8" />  <!-- 底面边长 -->
+        <param name="dyn_obs/height" value="2.0" />  <!-- 高度 -->
+        <param name="dyn_obs/speed_l" value="0.5" /> <!-- 速度范围 -->
+        <param name="dyn_obs/speed_h" value="2.0" />
+        <param name="dyn_obs/period_l" value="3.0" /> <!-- 周期范围 -->
+        <param name="dyn_obs/period_h" value="8.0" />
+        <param name="dyn_obs/radius_l" value="1.5" />  <!-- 轨迹半径范围 -->
+        <param name="dyn_obs/radius_h" value="5.0" />
+    </node>
+
+    <!-- rviz -->
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find form_nav)/rviz/dwa_simple.rviz" />
+
+    <!-- 坐标转换 -->
+    <node pkg="tf" type="static_transform_publisher" name="world_map_linker" args="0 0 0 0 0 0 world map 100" />
+
+    <!-- 切换模式，解锁 -->
+    <include file="$(find form_nav)/launch/uav_base.launch" >
+        <param name="uav_id" value="uav0" />
+    </include>
+
+    <!-- 全局规划器-->
+    <include file="$(find form_nav)/launch/kino_astar_grid.launch" />
+
+    <!-- 局部规划器-->
+    <!-- <include file="$(find form_nav)/launch/dwa_esdf.launch" /> -->
+
+</launch>
