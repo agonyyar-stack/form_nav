@@ -58,7 +58,7 @@
     <include file="$(find form_nav)/launch/kino_astar_grid.launch" />
 
     <!-- 单机局部 MPC（第一阶段暂不启用 LMPC 稳定性约束）。 -->
-    <include file="$(find form_nav)/launch/mpc_esdf.launch" />
+    <!-- <include file="$(find form_nav)/launch/mpc_esdf.launch" /> -->
 
     <!-- 旧 DWA 局部规划器暂时保留，避免删除历史模块；单机验证时不启动。 -->
     <!-- <include file="$(find form_nav)/launch/dwa_esdf.launch" /> -->

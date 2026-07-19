@@ -385,8 +385,11 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
 
         ErrorTerms errors1 = formationError(k, t_k, neighbor_params, X_k);
         MX S_i1 = errors1.S1;
+        // 第一阶段仅验证全局路径跟踪；暂时停用 ESDF 和编队碰撞代价，原实现保留。
+#if 0
         MX H_oa = esdfObstacleAvoidance(X_k); // 基于ESDF的障碍物避障
         MX H_ca = collisionAvoidance(t_k, k, neighbor_params, X_k);
+#endif
 
         if (k < N_) {
             cost += MX::mtimes({S_i1.T(), Q_, S_i1});
@@ -407,7 +410,10 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                 cost += MX::mtimes({v_err.T(), F_, v_err});  // 复用 F_ 作为速度跟踪权重
             }
 
+            // 障碍物/邻机避碰代价在后续阶段恢复。
+#if 0
             cost += (H_oa + H_ca);
+#endif
 
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k});
@@ -429,7 +435,9 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                 cost += MX::mtimes({v_err.T(), F_, v_err});
             }
 
+#if 0
             cost += (H_oa + H_ca);
+#endif
         }
     }
     opti.minimize(cost);

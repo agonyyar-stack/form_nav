@@ -1,4 +1,5 @@
 #include <ros/ros.h>
+#include <xmlrpcpp/XmlRpcException.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
@@ -193,6 +194,8 @@ void controlLoop(const ros::TimerEvent&) {
     std::vector<UavState> neighbors_vec;
     for (auto& p : neighbors_map) neighbors_vec.push_back(p.second); // 末尾追加
 
+    // 第一阶段只验证全局路径跟踪；暂时停用 ESDF 构建/更新，原代码保留。
+#if 0
     // ESDF 更新：定期重建 CasADi interpolant（每 1 秒检查一次）
     static ros::Time last_esdf_update = ros::Time::now();
     if ((ros::Time::now() - last_esdf_update).toSec() > 1.0) {
@@ -217,6 +220,7 @@ void controlLoop(const ros::TimerEvent&) {
         }
         last_esdf_update = ros::Time::now();
     }
+#endif
 
     // 求解 MPC (t0 = 最近点时间)
     bool ok = mpc_ptr->solve(t0, neighbors_vec, current_mpc_state);
@@ -313,6 +317,7 @@ int main(int argc, char **argv) {
     ros::NodeHandle nh;
     ros::NodeHandle nh_private("~");
 
+    try {
     // --- 参数读取 ---
     int my_id = nh_private.param<int>("my_id", 0);
     UAV_NAME = "uav" + std::to_string(my_id);
@@ -325,16 +330,29 @@ int main(int argc, char **argv) {
     // XmlRpc::XmlRpcValue 是 ROS 参数服务器的通用容器类型，可以容纳 int/double/string/array/struct 等任意 YAML 结构
     XmlRpc::XmlRpcValue offsets_param;
     if (nh_private.getParam("formation_offsets", offsets_param)) {
-        for (auto it = offsets_param.begin(); it != offsets_param.end(); ++it) {
-            // it->first 是键，std::stoi 转为 int
-            int id = std::stoi(it->first);
-            // 初始化 4 个元素为 0 的偏移向量 [0,0,0,0]
-            std::vector<double> offset(4, 0.0);
-            // it->second 是值
-            for (int i = 0; i < it->second.size() && i < 4; ++i)
-                offset[i] = static_cast<double>(it->second[i]);
-            formation_offsets[id] = offset;
+        if (offsets_param.getType() == XmlRpc::XmlRpcValue::TypeStruct) {
+            for (auto it = offsets_param.begin(); it != offsets_param.end(); ++it) {
+                // it->first 是键，std::stoi 转为 int
+                int id = std::stoi(it->first);
+                // 初始化 4 个元素为 0 的偏移向量 [0,0,0,0]
+                std::vector<double> offset(4, 0.0);
+                // it->second 是值
+                for (int i = 0; i < it->second.size() && i < 4; ++i) {
+                    auto& val = it->second[i];
+                    if (val.getType() == XmlRpc::XmlRpcValue::TypeInt)
+                        offset[i] = static_cast<double>(static_cast<int>(val));
+                    else if (val.getType() == XmlRpc::XmlRpcValue::TypeDouble)
+                        offset[i] = static_cast<double>(val);
+                }
+                formation_offsets[id] = offset;
+            }
+            ROS_INFO("formation_offsets parsed successfully");
+        } else {
+            ROS_WARN("formation_offsets param exists but is not a struct (type=%d), ignoring.", 
+                     offsets_param.getType());
         }
+    } else {
+        ROS_INFO("formation_offsets not found (OK)");
     }
     // 如果 formation_offsets 里没有自己的 ID，补一个 [0,0,0,0]
     if (formation_offsets.find(my_id) == formation_offsets.end())
@@ -350,10 +368,12 @@ int main(int argc, char **argv) {
     mpc_ptr->setTrackingModel(tracking_model);
     mpc_ptr->setFormationOffsets(formation_offsets);
 
-    // --- ESDF 地图初始化 ---
+    // 第一阶段不使用障碍物代价，暂时停用 ESDF 地图初始化；原代码保留。
+#if 0
     sdf_map_ptr.reset(new SDFMap());
     sdf_map_ptr->initMap(nh_private); // nh 是公共 NodeHandle，读取 /sdf_map/...
     mpc_ptr->setEsdf(&esdf_casadi);
+#endif
 
     // --- 订阅（位置、速度、姿态、邻居预测状态） --- 
     ros::Subscriber pose_sub = nh.subscribe("/" + UAV_NAME + "/mavros/local_position/pose", 10, poseCallback);
@@ -393,13 +413,22 @@ int main(int argc, char **argv) {
 
     ros::Rate rate(LOOP_RATE);
 
-    // --- 初始化 ESDF CasADi 插值器 (延迟初始化，由 controlLoop 完成) ---
-    // 不在此处阻塞等待，因为 odom/cloud 到达顺序不确定可能导致死等
-    ROS_INFO("%s: ESDF will be lazily initialized in control loop.", UAV_NAME.c_str());
+    // 第一阶段不构建 ESDF；后续恢复障碍物代价时再启用延迟初始化逻辑。
+    ROS_INFO("%s: running single-UAV global-trajectory tracking without obstacle cost.", UAV_NAME.c_str());
 
     // 定时器
     ros::Timer timer = nh.createTimer(ros::Duration(1.0/LOOP_RATE), controlLoop);
 
     ros::spin();
+    } catch (const XmlRpc::XmlRpcException& e) {
+        ROS_FATAL("XmlRpcException: %s (code=%d)", e.getMessage().c_str(), e.getCode());
+        return 1;
+    } catch (const std::exception& e) {
+        ROS_FATAL("Exception in main: %s", e.what());
+        return 1;
+    } catch (...) {
+        ROS_FATAL("Unknown exception in main");
+        return 1;
+    }
     return 0;
 }
