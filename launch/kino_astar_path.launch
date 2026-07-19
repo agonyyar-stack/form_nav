@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="uav_id" default="uav0" />
+  <node name="kino_astar_path_node" pkg="form_nav" type="kino_astar_path_node" output="screen">
+    <!-- grid_map parameters -->
+    <param name="grid_map/resolution" value="0.1" />
+    <param name="grid_map/map_size_x" value="55.0" />
+    <param name="grid_map/map_size_y" value="55.0" />
+    <param name="grid_map/map_size_z" value="3.0" />
+    <param name="grid_map/local_update_range_x" value="40.0" />
+    <param name="grid_map/local_update_range_y" value="20.0" />
+    <param name="grid_map/local_update_range_z" value="3.0" />
+    <param name="grid_map/obstacles_inflation" value="0.099" />
+    <param name="grid_map/local_map_margin" value="30" />
+    <param name="grid_map/ground_height" value="-0.01" />
+    <param name="grid_map/p_hit" value="0.65" />
+    <param name="grid_map/p_miss" value="0.35" />
+    <param name="grid_map/p_min" value="0.12" />
+    <param name="grid_map/p_max" value="0.90" />
+    <param name="grid_map/p_occ" value="0.80" />
+    <param name="grid_map/min_ray_length" value="0.1" />
+    <param name="grid_map/max_ray_length" value="4.5" />
+    <param name="grid_map/virtual_ceil_height" value="2.5" />
+    <param name="grid_map/visualization_truncate_height" value="2.4" />
+    <param name="grid_map/show_occ_time" value="false" />
+    <param name="grid_map/pose_type" value="2" />
+    <param name="grid_map/frame_id" value="world" />
+
+    <!-- kino_astar parameters -->
+    <param name="kino_astar/rou_time" value="50.0"/>
+    <param name="kino_astar/lambda_heu" value="3.0"/>
+    <param name="kino_astar/allocated_node_num" value="100000"/>
+    <param name="kino_astar/goal_tolerance" value="2.0"/>
+    <param name="kino_astar/time_step_size" value="0.03"/>
+    <param name="kino_astar/max_velocity" value="7.0"/>
+    <param name="kino_astar/max_accelration" value="10.0"/>
+    <param name="kino_astar/acc_resolution" value="4.0"/>
+    <param name="kino_astar/sample_tau" value="0.3"/>
+
+    <!-- collision check type 1: kino_astar, 2: kino_se3 -->
+    <param name="kino_astar/collision_check_type" value="1"/>
+    <!-- robot ellipsoid parameters -->
+    <param name="kino_se3/robot_r" value="0.4"/>
+    <param name="kino_se3/robot_h" value="0.1"/>
+    <remap from="~local_cloud" to="/pcl_render_node/cloud"/>
+
+    <remap from="/grid_map/cloud" to="/map_generator/global_cloud"/>
+    <remap from="/grid_map/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>
+    <remap from="/kino_astar/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>
+  </node>
+</launch>

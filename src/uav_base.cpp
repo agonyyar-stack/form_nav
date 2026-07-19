@@ -119,7 +119,7 @@ public:
         
         // 本地位置指令发布
         local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local", 10);
-        vel_sub = nh.subscribe<geometry_msgs::Twist>("/mavros/setpoint_velocity/cmd_vel_unstamped", 10, &DroneController::velocity_cb, this);
+        vel_sub = nh.subscribe<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel", 10, &DroneController::velocity_cb, this);
         
         // 等待MAVROS连接
         ROS_INFO("等待MAVROS连接...");
@@ -146,7 +146,7 @@ public:
     }
 
     // 速度指令回调：收到第一个速度指令后停止发布位置 setpoint
-    void velocity_cb(const geometry_msgs::Twist::ConstPtr& msg) {
+    void velocity_cb(const geometry_msgs::TwistStamped::ConstPtr& msg) {
         if (!velocity_cmd_received) {
             velocity_cmd_received = true;
             ROS_INFO("收到第一个速度指令,停止发布位置 setpoint,切换为速度控制");

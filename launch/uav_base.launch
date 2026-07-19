@@ -8,7 +8,7 @@
     <remap from="/mavros/cmd/arming" to="/$(arg uav_id)/mavros/cmd/arming" />
     <remap from="/mavros/set_mode" to="/$(arg uav_id)/mavros/set_mode" />
     <remap from="/mavros/setpoint_position/local" to="/$(arg uav_id)/mavros/setpoint_position/local" />
-    <remap from="/mavros/setpoint_velocity/cmd_vel_unstamped" to="/$(arg uav_id)/mavros/setpoint_velocity/cmd_vel_unstamped" />
+    <remap from="/mavros/setpoint_velocity/cmd_vel" to="/$(arg uav_id)/mavros/setpoint_velocity/cmd_vel" />
   </node>
 
 </launch>
