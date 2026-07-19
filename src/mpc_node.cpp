@@ -26,7 +26,14 @@ ros::Publisher predicted_path_viz_pub;
 ros::Publisher traveled_path_pub;
 
 // --- 状态量 ---
-Eigen::VectorXd current_mpc_state(8);
+// 显式初始化，避免首个传感器消息到达前把未定义数据送入求解器。
+Eigen::VectorXd current_mpc_state = Eigen::VectorXd::Zero(8);
+
+// 控制循环只有在这些数据全部到齐后才允许调用 MPC。
+bool has_pose = false;
+bool has_velocity = false;
+bool has_yaw = false;
+int last_global_idx = 0;
 
 double vel_world_x = 0, vel_world_y = 0, vel_world_z = 0;
 double vel_body_w = 0;
@@ -51,6 +58,11 @@ bool global_traj_received = false;
 void globalTrajCallback(const std_msgs::Float64MultiArray::ConstPtr& msg) {
     if (msg->layout.dim.empty()) return;
     int stride = msg->layout.dim[0].stride;  // = 7
+    if (stride != 7 || msg->data.size() < static_cast<size_t>(stride) ||
+        msg->data.size() % static_cast<size_t>(stride) != 0) {
+        ROS_WARN_THROTTLE(2.0, "%s: Invalid global trajectory layout.", UAV_NAME.c_str());
+        return;
+    }
     int n = msg->data.size() / stride;
     if (n == 0) return;
 
@@ -73,6 +85,8 @@ void globalTrajCallback(const std_msgs::Float64MultiArray::ConstPtr& msg) {
 
     if (!global_traj.empty()) {
         global_traj_received = true;
+        // 新路径从头开始，避免沿用上一条路径的最近点索引。
+        last_global_idx = 0;
         mpc_ptr->setGlobalTrajectory(global_traj);
         ROS_INFO("%s: Received global trajectory with %zu waypoints", 
                  UAV_NAME.c_str(), global_traj.size());
@@ -83,11 +97,10 @@ void globalTrajCallback(const std_msgs::Float64MultiArray::ConstPtr& msg) {
 double findClosestWaypointTime(const Eigen::VectorXd& state) {
     if (global_traj.empty()) return 0.0;
 
-    static int last_idx = 0;                     // 上一时刻最近点索引
     const int win_back = 3, win_forward = 30;    // 搜索窗口: [last-3, last+30]
 
-    int lo = std::max(0, last_idx - win_back);
-    int hi = std::min((int)global_traj.size() - 1, last_idx + win_forward);
+    int lo = std::max(0, last_global_idx - win_back);
+    int hi = std::min((int)global_traj.size() - 1, last_global_idx + win_forward);
 
     double min_dist = 1e9;
     int closest = lo;
@@ -116,15 +129,20 @@ double findClosestWaypointTime(const Eigen::VectorXd& state) {
         }
     }
 
-    last_idx = closest;
+    // 路径进度保持单调，避免无人机在弯道或局部回头时跳回旧路径段。
+    closest = std::max(closest, last_global_idx);
+    last_global_idx = closest;
     return global_traj[closest].t;
 }
 
 // ========== MAVROS 回调 ==========
 void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
-    current_mpc_state(0) = msg->pose.position.x - 2; //******** 后面也参数化*******************************************
+    // Kinodynamic A*、点云和 MPC 统一使用 MAVROS 的 world 坐标，不再
+    // 使用原先未说明来源的固定 x 偏移。
+    current_mpc_state(0) = msg->pose.position.x;
     current_mpc_state(1) = msg->pose.position.y;
     current_mpc_state(2) = msg->pose.position.z;
+    has_pose = true;
 }
 
 void velocityCallbackWorld(const geometry_msgs::TwistStamped::ConstPtr& msg) {
@@ -132,6 +150,7 @@ void velocityCallbackWorld(const geometry_msgs::TwistStamped::ConstPtr& msg) {
     vel_world_y = msg->twist.linear.y;
     vel_world_z = msg->twist.linear.z;
     vel_body_w = msg->twist.angular.z;
+    has_velocity = true;
 }
 
 void imuCallback(const sensor_msgs::Imu::ConstPtr& msg) {
@@ -142,10 +161,23 @@ void imuCallback(const sensor_msgs::Imu::ConstPtr& msg) {
     double roll, pitch, yaw;
     m.getRPY(roll, pitch, yaw);
     current_mpc_state(3) = yaw;
+    has_yaw = true;
 }
 
 // ========== 主控制循环 ==========
 void controlLoop(const ros::TimerEvent&) {
+    // 传感器或全局参考未准备好时不求解。发布零速度保持连续的
+    // setpoint 流，避免将无效状态解释为有效控制量。
+    if (!has_pose || !has_velocity || !has_yaw || !global_traj_received) {
+        geometry_msgs::Twist hold_cmd;
+        hold_cmd.linear.x = 0.0;
+        hold_cmd.linear.y = 0.0;
+        hold_cmd.linear.z = 0.0;
+        hold_cmd.angular.z = 0.0;
+        cmd_vel_pub.publish(hold_cmd);
+        return;
+    }
+
     // 寻找当前最近路径点的时间
     double t0 = findClosestWaypointTime(current_mpc_state);
 

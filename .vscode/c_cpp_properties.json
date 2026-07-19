@@ -1,0 +1,46 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/raner/catkin_ws/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/home/raner/catkin_ws/src/Avoid-MPC/roswrapper/ros/src/airsim_ros_pkgs/include/**",
+        "/home/raner/catkin_ws/src/Avoid-MPC/roswrapper/ros/src/avoid_mpc/include/**",
+        "/home/raner/catkin_ws/src/cv_pkg/include/**",
+        "/home/raner/catkin_ws/src/dwa_planner/include/**",
+        "/home/raner/catkin_ws/src/dynamic_map_generator/include/**",
+        "/home/raner/catkin_ws/src/form_nav/include/**",
+        "/home/raner/catkin_ws/src/imu_pkg/include/**",
+        "/home/raner/catkin_ws/src/lidar_pkg/include/**",
+        "/home/raner/catkin_ws/src/map_pkg/include/**",
+        "/home/raner/catkin_ws/src/mav_comm/mav_msgs/include/**",
+        "/home/raner/catkin_ws/src/mav_comm/mav_planning_msgs/include/**",
+        "/home/raner/catkin_ws/src/mpc_tracking/include/**",
+        "/home/raner/catkin_ws/src/mpc_uav_base/include/**",
+        "/home/raner/catkin_ws/src/nav_pkg/include/**",
+        "/home/raner/catkin_ws/src/offboard_simple/include/**",
+        "/home/raner/catkin_ws/src/qq_msgs/include/**",
+        "/home/raner/catkin_ws/src/slam_pkg/include/**",
+        "/home/raner/catkin_ws/src/ros_tutorials/turtlesim/include/**",
+        "/home/raner/catkin_ws/src/Avoid-MPC/roswrapper/ros/src/betaflight_ctrl/uav_utils/include/**",
+        "/home/raner/catkin_ws/src/vel_pkg/include/**",
+        "/home/raner/catkin_ws/src/waterplus_map_tools/include/**",
+        "/home/raner/catkin_ws/src/wpb_home/wpb_home_bringup/include/**",
+        "/home/raner/catkin_ws/src/wpb_home/wpb_home_tutorials/include/**",
+        "/home/raner/catkin_ws/src/wpb_home/wpbh_local_planner/include/**",
+        "/home/raner/catkin_ws/src/wpr_simulation/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}

@@ -6,6 +6,8 @@
     <arg name="est" default="ekf2"/>
     <arg name="vehicle" default="iris"/>
     <arg name="world" default="$(find form_nav)/worlds/pure_empty.world"/>
+    <!-- 默认保持双机仿真；单机基础验证时由 test.launch 关闭 uav1。 -->
+    <arg name="spawn_uav1" default="true"/>
     <!-- gazebo configs -->
     <arg name="gui" default="true"/>
     <arg name="debug" default="false"/>
@@ -50,7 +52,7 @@
         </include>
     </group>
     <!-- UAV1 -->
-    <group ns="uav1">
+    <group ns="uav1" if="$(arg spawn_uav1)">
         <!-- MAVROS and vehicle configs -->
         <arg name="ID" value="1"/>
         <arg name="fcu_url" default="udp://:14541@localhost:14581"/>

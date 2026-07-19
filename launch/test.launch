@@ -1,10 +1,15 @@
 <launch>
     <!-- gazebo -->
-    <include file="$(find form_nav)/launch/multi_uav_gazebo.launch" />
+    <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">
+        <!-- 第一阶段只生成 uav0，保留多机启动文件供后续编队实验使用。 -->
+        <arg name="spawn_uav1" value="false" />
+    </include>
 
     <!-- 静态障碍物地图生成 -->
     <!-- pkg：指定哪个 ROS 包，type：包里要运行的可执行文件名，name：该节点启动后在 ROS 系统里注册的名字 -->
-    <node pkg="form_nav" type="random_static_obs" name="random_static_obs" output="screen" >
+    <!-- CMake 中的可执行文件名为 random_obs。保留节点名 random_static_obs，
+         仅修正 type，避免 launch 找不到可执行文件。 -->
+    <node pkg="form_nav" type="random_obs" name="random_static_obs" output="screen" >
         <param name="pattern" value="1" /> <!-- 1=静态(默认), 2=动态, 3=静+动 -->
 
         <param name="map/x_size"     value="30.0" /> <!-- 地图的x轴大小 -->
@@ -52,7 +57,10 @@
     <!-- 全局规划器-->
     <include file="$(find form_nav)/launch/kino_astar_grid.launch" />
 
-    <!-- 局部规划器-->
+    <!-- 单机局部 MPC（第一阶段暂不启用 LMPC 稳定性约束）。 -->
+    <include file="$(find form_nav)/launch/mpc_esdf.launch" />
+
+    <!-- 旧 DWA 局部规划器暂时保留，避免删除历史模块；单机验证时不启动。 -->
     <!-- <include file="$(find form_nav)/launch/dwa_esdf.launch" /> -->
 
 </launch>

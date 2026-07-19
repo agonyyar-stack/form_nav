@@ -200,15 +200,26 @@ ErrorTerms Mpc::formationError(int k_step, MX t, std::map<int, MX>& neighbor_par
 
     // 输出
     ret.S1       = S1_accum;
-    // ret.S1_dot   = S1_dot_accum;
-    // ret.S2       = S1_dot_accum + mtimes(k1, S1_accum);
-    // ret.sum_term = sum_term;
+    // LMPC 暂未启用。保留接口并提供零占位量，避免将来误调用时使用
+    // 未构造的 CasADi 表达式。
+    ret.S1_dot   = MX::zeros(4, 1);
+    ret.S2       = MX::zeros(4, 1);
+    ret.sum_term = MX::zeros(4, 1);
 
     return ret;
 }
 
 MX Mpc::ViLmpcDot(int k_step, MX t, std::map<int, MX>& neighbor_params, MX current_states, MX U_k) {
-    
+    // LMPC 稳定性约束暂时关闭。下面保留原始推导代码，待普通 MPC
+    // 单机验证完成后，再单独恢复并检查辅助误差的完整定义。
+    (void)k_step;
+    (void)t;
+    (void)neighbor_params;
+    (void)current_states;
+    (void)U_k;
+    return MX(0.0);
+
+#if 0
     ErrorTerms errors = formationError(k_step, t, neighbor_params, current_states);
     MX S1 = errors.S1;
     MX S2 = errors.S2;
@@ -258,6 +269,7 @@ MX Mpc::ViLmpcDot(int k_step, MX t, std::map<int, MX>& neighbor_params, MX curre
     MX term3 = mtimes(S2.T(), term3_bracket);
 
     return term1 - term2 + term3;
+#endif
 }
 
 MX Mpc::esdfObstacleAvoidance(MX current_states) {
@@ -309,22 +321,31 @@ MX Mpc::collisionAvoidance(MX t, int k_step, std::map<int, MX>& neighbor_params,
         H_ca += h_ca;
     }
 
-    //与tracked uav的避碰
+    // 暂时禁用“与 tracked UAV/参考点避碰”项。单机需要跟踪该参考点，
+    // 将参考点同时作为碰撞对象会在目标位置产生最大碰撞惩罚。
+    // 原实现保留如下，待多机真实领航者模型接入后再恢复：
+#if 0
     if (has_global_traj_) {
         MX d_param = globalTrajectory(t);
         MX y_d = d_param(Slice(0, 3));
-
         MX diff = pos_i - y_d;
         MX dist = MX::norm_2(diff);
-
         MX h_ca = Wc *(1.0 / (1.0 + exp(dist - d_safe_ca)));
         H_ca += h_ca;
     }
+#endif
 
     return H_ca;
 }
 
 bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states) {
+    // 控制节点负责等待传感器和全局轨迹；这里再做一次尺寸检查，避免
+    // 未初始化状态进入 CasADi 参数并产生难以定位的维度错误。
+    if (current_states.size() != 8) {
+        std::cerr << "[MPC] Invalid current state dimension: "
+                  << current_states.size() << std::endl;
+        return false;
+    }
     
     Opti opti = Opti(); //创建优化问题实例
 
