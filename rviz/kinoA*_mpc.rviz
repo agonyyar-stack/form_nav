@@ -5,11 +5,12 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
-        - /Grid1/Offset1
+        - /Grid1
+        - /kinoA*1
         - /kinoA*1/kinoA*_path_nodes1
-        - /UAV01/UAV0_Pose1
+        - /UAV01
         - /UAV01/MPC1
-        - /UAV01/MPC1/DWA_BestTraj1
+        - /UAV01/MPC1/mpc_trajectory1
       Splitter Ratio: 0.5024154782295227
     Tree Height: 1492
   - Class: rviz/Selection
@@ -48,11 +49,11 @@ Visualization Manager:
       Name: Grid
       Normal Cell Count: 0
       Offset:
-        X: -2.5
+        X: 0
         Y: 0
         Z: 0
       Plane: XY
-      Plane Cell Count: 35
+      Plane Cell Count: 100
       Reference Frame: <Fixed Frame>
       Value: true
     - Alpha: 0.5
@@ -204,7 +205,7 @@ Visualization Manager:
               Color: 223; 178; 13
               Color Transformer: FlatColor
               Decay Time: 0
-              Enabled: true
+              Enabled: false
               Invert Rainbow: false
               Max Color: 255; 255; 255
               Min Color: 0; 0; 0
@@ -219,11 +220,11 @@ Visualization Manager:
               Unreliable: false
               Use Fixed Frame: true
               Use rainbow: true
-              Value: true
+              Value: false
             - Class: rviz/Marker
               Enabled: true
               Marker Topic: /uav0/mpc_predicted_path_marker
-              Name: DWA_BestTraj
+              Name: mpc_trajectory
               Namespaces:
                 {}
               Queue Size: 100
@@ -260,7 +261,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 50.74378967285156
+      Distance: 51.76482391357422
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -268,17 +269,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -4.442759037017822
-        Y: 0.8606781363487244
-        Z: -8.932683944702148
+        X: -1.586034893989563
+        Y: 0.8803576827049255
+        Z: -8.670969009399414
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.0997965335845947
+      Pitch: 1.0047962665557861
       Target Frame: <Fixed Frame>
-      Yaw: 4.933563709259033
+      Yaw: 4.73856258392334
     Saved: ~
 Window Geometry:
   Displays:

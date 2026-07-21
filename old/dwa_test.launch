@@ -44,7 +44,7 @@
     </node>
 
     <!-- rviz -->
-    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find form_nav)/rviz/dwa_re.rviz" />
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find form_nav)/rviz/kinoA*_dwa.rviz" />
 
     <!-- 坐标转换 -->
     <node pkg="tf" type="static_transform_publisher" name="world_map_linker" args="0 0 0 0 0 0 world map 100" />
