@@ -5,9 +5,9 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
-        - /kinoA*1
+        - /Grid1/Offset1
         - /kinoA*1/kinoA*_path_nodes1
-        - /UAV01
+        - /UAV01/UAV0_Pose1
         - /UAV01/MPC1
         - /UAV01/MPC1/DWA_BestTraj1
       Splitter Ratio: 0.5024154782295227
@@ -37,10 +37,10 @@ Toolbars:
 Visualization Manager:
   Class: ""
   Displays:
-    - Alpha: 0.5
+    - Alpha: 1
       Cell Size: 1
       Class: rviz/Grid
-      Color: 160; 160; 164
+      Color: 85; 87; 83
       Enabled: true
       Line Style:
         Line Width: 0.029999999329447746
@@ -48,11 +48,11 @@ Visualization Manager:
       Name: Grid
       Normal Cell Count: 0
       Offset:
-        X: 0
+        X: -2.5
         Y: 0
         Z: 0
       Plane: XY
-      Plane Cell Count: 60
+      Plane Cell Count: 35
       Reference Frame: <Fixed Frame>
       Value: true
     - Alpha: 0.5
@@ -60,7 +60,7 @@ Visualization Manager:
       Enabled: true
       Length: 5
       Name: map frame
-      Radius: 0.05000000074505806
+      Radius: 0.10000000149011612
       Reference Frame: <Fixed Frame>
       Show Trail: false
       Value: true
@@ -69,7 +69,7 @@ Visualization Manager:
       Marker Topic: /kino_astar/goal_marker
       Name: GoalPoint
       Namespaces:
-        kino_astar/goal: true
+        {}
       Queue Size: 100
       Value: true
     - Alpha: 1
@@ -135,7 +135,7 @@ Visualization Manager:
           Marker Topic: /kino_astar/path_marker
           Name: kinoA*_path_marker
           Namespaces:
-            kino_astar/path: true
+            {}
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
@@ -143,7 +143,7 @@ Visualization Manager:
           Marker Topic: /kino_astar_node/kino_astar_path_nodes
           Name: kinoA*_path_nodes
           Namespaces:
-            "": true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
@@ -236,7 +236,7 @@ Visualization Manager:
   Global Options:
     Background Color: 255; 255; 255
     Default Light: true
-    Fixed Frame: map
+    Fixed Frame: world
     Frame Rate: 30
   Name: root
   Tools:
@@ -260,7 +260,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 47.252906799316406
+      Distance: 50.74378967285156
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -268,17 +268,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 0.3409444987773895
-        Y: -4.547404766082764
-        Z: -12.768648147583008
+        X: -4.442759037017822
+        Y: 0.8606781363487244
+        Z: -8.932683944702148
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.1147968769073486
+      Pitch: 1.0997965335845947
       Target Frame: <Fixed Frame>
-      Yaw: 5.99857759475708
+      Yaw: 4.933563709259033
     Saved: ~
 Window Geometry:
   Displays:

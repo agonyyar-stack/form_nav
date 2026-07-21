@@ -1,15 +1,13 @@
 <launch>
     <!-- gazebo -->
     <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">
-        <!-- 第一阶段只生成 uav0，保留多机启动文件供后续编队实验使用。 -->
-        <arg name="spawn_uav1" value="false" />
     </include>
 
     <!-- 静态障碍物地图生成 -->
     <!-- pkg：指定哪个 ROS 包，type：包里要运行的可执行文件名，name：该节点启动后在 ROS 系统里注册的名字 -->
     <!-- CMake 中的可执行文件名为 random_obs。保留节点名 random_static_obs，
          仅修正 type，避免 launch 找不到可执行文件。 -->
-    <node pkg="form_nav" type="random_obs" name="random_static_obs" output="screen" >
+    <node pkg="form_nav" type="random_obs" name="random__obs" output="screen" >
         <param name="pattern" value="1" /> <!-- 1=静态(默认), 2=动态, 3=静+动 -->
 
         <param name="map/x_size"     value="30.0" /> <!-- 地图的x轴大小 -->
@@ -17,13 +15,13 @@
         <param name="map/z_size"     value="3" /> <!-- 地图的z轴大小 -->
         <param name="map/resolution" value="0.1"/> <!-- 地图的分辨率为空间分辨率 -->
 
-        <param name="map/obs_num"    value="100"/> <!-- 障碍物的数量 -->
+        <param name="map/obs_num"    value="500"/> <!-- 障碍物的数量 -->
         <param name="ObstacleShape/lower_rad" value="0.5"/> <!-- 障碍物的最小半径 -->
         <param name="ObstacleShape/upper_rad" value="0.7"/> <!-- 障碍物的最大半径 -->
         <param name="ObstacleShape/lower_hei" value="0.0"/> <!-- 障碍物的最小高度 -->
         <param name="ObstacleShape/upper_hei" value="3.0"/> <!-- 障碍物的最大高度 -->
 
-        <param name="map/circle_num" value="100"/> <!-- 圆形障碍物的数量 -->
+        <param name="map/circle_num" value="500"/> <!-- 圆形障碍物的数量 -->
         <param name="ObstacleShape/radius_l" value="0.7"/> <!-- 圆形障碍物的最小半径 -->
         <param name="ObstacleShape/radius_h" value="0.5"/> <!-- 圆形障碍物的最大半径 -->
         <param name="ObstacleShape/z_l" value="0.7"/> <!-- 圆形障碍物的最小高度 -->
@@ -46,16 +44,13 @@
     <!-- rviz -->
     <node pkg="rviz" type="rviz" name="rviz" args="-d $(find form_nav)/rviz/dwa_simple.rviz" />
 
-    <!-- 坐标转换 -->
-    <node pkg="tf" type="static_transform_publisher" name="world_map_linker" args="0 0 0 0 0 0 world map 100" />
-
     <!-- 切换模式，解锁 -->
-    <include file="$(find form_nav)/launch/uav_base.launch" >
+    <!-- <include file="$(find form_nav)/launch/uav_base.launch" >
         <param name="uav_id" value="uav0" />
-    </include>
+    </include> -->
 
     <!-- 全局规划器-->
-    <include file="$(find form_nav)/launch/kino_astar_grid.launch" />
+    <!-- <include file="$(find form_nav)/launch/kino_astar_grid.launch" /> -->
 
     <!-- 单机局部 MPC（第一阶段暂不启用 LMPC 稳定性约束）。 -->
     <!-- <include file="$(find form_nav)/launch/mpc_esdf.launch" /> -->

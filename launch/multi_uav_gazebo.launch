@@ -3,41 +3,91 @@
     <!-- MAVROS posix SITL environment launch script -->
     <!-- launches Gazebo environment and 2x: MAVROS, PX4 SITL, and spawns vehicle -->
     <!-- vehicle model and world -->
-    <arg name="est" default="ekf2"/>
-    <arg name="vehicle" default="iris"/>
+    <arg name="est" default="ekf2"/>  <!-- 状态估计器：扩展卡尔曼滤波 v2 -->
+    <arg name="vehicle" default="iris"/> <!-- 无人机模型：Iris 四旋翼 -->
     <arg name="world" default="$(find form_nav)/worlds/pure_empty.world"/>
-    <!-- 默认保持双机仿真；单机基础验证时由 test.launch 关闭 uav1。 -->
-    <arg name="spawn_uav1" default="true"/>
     <!-- gazebo configs -->
-    <arg name="gui" default="true"/>
-    <arg name="debug" default="false"/>
-    <arg name="verbose" default="false"/>
-    <arg name="paused" default="false"/>
+    <arg name="gui" default="false"/>
+    <arg name="debug" default="false"/> <!-- 是否以调试模式启动 -->
+    <arg name="verbose" default="false"/>  <!-- 是否输出详细日志 -->
+    <arg name="paused" default="false"/> <!-- 启动时是否暂停仿真 -->
     <!-- Gazebo sim -->
     <include file="$(find gazebo_ros)/launch/empty_world.launch">
-        <arg name="gui" value="$(arg gui)"/>
+        <arg name="gui" value="$(arg gui)"/> <!-- true 打开可视化窗口，false 纯后台运行（适合集群批量测试） -->
         <arg name="world_name" value="$(arg world)"/>
         <arg name="debug" value="$(arg debug)"/>
         <arg name="verbose" value="$(arg verbose)"/>
-        <arg name="paused" value="$(arg paused)"/>
+        <arg name="paused" value="$(arg paused)"/> <!-- true 启动后暂停，方便你先配置好再手动开始仿真 -->
     </include>
 
     <!-- UAV0 -->
     <group ns="uav0">
         <!-- MAVROS and vehicle configs -->
         <arg name="ID" value="0"/>
+        <!-- 协议类型：//MAVROS 绑定的本地端口（接收端口）@PX4 SITL 监听的端口（发送端口） -->
         <arg name="fcu_url" default="udp://:14540@localhost:14580"/>
+        <arg name="x" value="-31"/>
+        <arg name="y" value="0"/>
+        <arg name="z" value="0"/>
+        <arg name="R" value="0"/>
+        <arg name="P" value="0"/>
+        <arg name="Y" value="0"/>
         <!-- PX4 SITL and vehicle spawn -->
         <include file="$(find px4)/launch/single_vehicle_spawn.launch">
-            <arg name="x" value="0"/>
-            <arg name="y" value="0"/>
-            <arg name="z" value="0"/>
-            <arg name="R" value="0"/>
-            <arg name="P" value="0"/>
-            <arg name="Y" value="0"/>
+            <arg name="x" value="$(arg x)"/>
+            <arg name="y" value="$(arg y)"/>
+            <arg name="z" value="$(arg z)"/>
+            <arg name="R" value="$(arg R)"/>
+            <arg name="P" value="$(arg P)"/>
+            <arg name="Y" value="$(arg Y)"/>
             <arg name="vehicle" value="$(arg vehicle)"/>
-            <arg name="mavlink_udp_port" value="14560"/>
-            <arg name="mavlink_tcp_port" value="4560"/>
+            <arg name="mavlink_udp_port" value="14560"/> <!-- PX4 ↔ Gazebo 的 UDP 端口 -->
+            <arg name="mavlink_tcp_port" value="4560"/> <!-- PX4 的 TCP 调试端口，地面站可通过 TCP 连接调试 -->
+            <arg name="ID" value="$(arg ID)"/>
+            <arg name="gst_udp_port" value="$(eval 5600 + arg('ID'))"/> 
+            <arg name="video_uri" value="$(eval 5600 + arg('ID'))"/>
+            <arg name="mavlink_cam_udp_port" value="$(eval 14530 + arg('ID'))"/>
+        </include>
+        <!-- MAVROS -->
+        <include file="$(find mavros)/launch/px4.launch">
+            <arg name="fcu_url" value="$(arg fcu_url)"/> <!-- 连接到 PX4 SITL 的 MAVLink 地址 -->
+            <arg name="gcs_url" value=""/> <!-- 地面站地址（空=不转发） -->
+            <arg name="tgt_system" value="$(eval 1 + arg('ID'))"/> <!-- MAVLink 系统 ID -->
+            <arg name="tgt_component" value="1"/> <!-- 组件 ID，飞控主组件固定为 1 -->
+        </include>
+        <!-- 覆盖 local_position 插件参数：frame_id 加命名空间前缀，开启 TF 广播 -->
+        <param name="mavros/local_position/frame_id" value="uav0/map"/>
+        <param name="mavros/local_position/tf/child_frame_id" value="uav0/base_link"/>
+        <param name="mavros/local_position/tf/frame_id" value="uav0/map"/>
+        <param name="mavros/local_position/tf/send" value="true"/>
+        <!-- tf和tf2_ros的区别：
+        1. tf2_ros是tf的升级版本，提供了更好的性能和功能。
+        2. tf2_ros在ROS2中得到了更广泛的支持和使用，而tf主要用于ROS1中。 -->
+        <node pkg="tf" type="static_transform_publisher" name="world_to_uav$(arg ID)_map" 
+              args="$(arg x) $(arg y) $(arg z) $(arg R) $(arg P) $(arg Y) world uav$(arg ID)/map 100" />
+    </group>
+    <!-- UAV1 -->
+    <group ns="uav1">
+        <!-- MAVROS and vehicle configs -->
+        <arg name="ID" value="1"/>
+        <arg name="fcu_url" default="udp://:14541@localhost:14581"/>
+        <arg name="x" value="-31"/>
+        <arg name="y" value="-1"/>
+        <arg name="z" value="0"/>
+        <arg name="R" value="0"/>
+        <arg name="P" value="0"/>
+        <arg name="Y" value="0"/>
+        <!-- PX4 SITL and vehicle spawn -->
+        <include file="$(find px4)/launch/single_vehicle_spawn.launch">
+            <arg name="x" value="$(arg x)"/>
+            <arg name="y" value="$(arg y)"/>
+            <arg name="z" value="$(arg z)"/>
+            <arg name="R" value="$(arg R)"/>
+            <arg name="P" value="$(arg P)"/>
+            <arg name="Y" value="$(arg Y)"/>
+            <arg name="vehicle" value="$(arg vehicle)"/>
+            <arg name="mavlink_udp_port" value="14561"/>
+            <arg name="mavlink_tcp_port" value="4561"/>
             <arg name="ID" value="$(arg ID)"/>
             <arg name="gst_udp_port" value="$(eval 5600 + arg('ID'))"/>
             <arg name="video_uri" value="$(eval 5600 + arg('ID'))"/>
@@ -50,36 +100,14 @@
             <arg name="tgt_system" value="$(eval 1 + arg('ID'))"/>
             <arg name="tgt_component" value="1"/>
         </include>
+        <!-- 覆盖 local_position 插件参数：frame_id 加命名空间前缀，开启 TF 广播 -->
+        <param name="mavros/local_position/frame_id" value="uav1/map"/>
+        <param name="mavros/local_position/tf/child_frame_id" value="uav1/base_link"/>
+        <param name="mavros/local_position/tf/frame_id" value="uav1/map"/>
+        <param name="mavros/local_position/tf/send" value="true"/>
+        <node pkg="tf" type="static_transform_publisher" name="world_to_uav$(arg ID)_map" 
+              args="$(arg x) $(arg y) $(arg z) $(arg R) $(arg P) $(arg Y) world uav$(arg ID)/map 100" />
     </group>
-    <!-- UAV1 -->
-    <!-- <group ns="uav1" if="$(arg spawn_uav1)"> -->
-        <!-- MAVROS and vehicle configs -->
-        <!-- <arg name="ID" value="1"/>
-        <arg name="fcu_url" default="udp://:14541@localhost:14581"/> -->
-        <!-- PX4 SITL and vehicle spawn -->
-        <!-- <include file="$(find px4)/launch/single_vehicle_spawn.launch">
-            <arg name="x" value="-31"/>
-            <arg name="y" value="-1"/>
-            <arg name="z" value="0"/>
-            <arg name="R" value="0"/>
-            <arg name="P" value="0"/>
-            <arg name="Y" value="0"/>
-            <arg name="vehicle" value="$(arg vehicle)"/>
-            <arg name="mavlink_udp_port" value="14561"/>
-            <arg name="mavlink_tcp_port" value="4561"/>
-            <arg name="ID" value="$(arg ID)"/>
-            <arg name="gst_udp_port" value="$(eval 5600 + arg('ID'))"/>
-            <arg name="video_uri" value="$(eval 5600 + arg('ID'))"/>
-            <arg name="mavlink_cam_udp_port" value="$(eval 14530 + arg('ID'))"/> -->
-        <!-- </include> -->
-        <!-- MAVROS -->
-        <!-- <include file="$(find mavros)/launch/px4.launch">
-            <arg name="fcu_url" value="$(arg fcu_url)"/>
-            <arg name="gcs_url" value=""/>
-            <arg name="tgt_system" value="$(eval 1 + arg('ID'))"/>
-            <arg name="tgt_component" value="1"/>
-        </include>
-    </group> -->
 </launch>
 <!-- to add more UAVs (up to 10):
 Increase the id
