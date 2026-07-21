@@ -7,7 +7,7 @@
     <!-- pkg：指定哪个 ROS 包，type：包里要运行的可执行文件名，name：该节点启动后在 ROS 系统里注册的名字 -->
     <!-- CMake 中的可执行文件名为 random_obs。保留节点名 random_static_obs，
          仅修正 type，避免 launch 找不到可执行文件。 -->
-    <node pkg="form_nav" type="random_obs" name="random__obs" output="screen" >
+    <node pkg="form_nav" type="random_obs" name="random_obs" output="screen" >
         <param name="pattern" value="1" /> <!-- 1=静态(默认), 2=动态, 3=静+动 -->
 
         <param name="map/x_size"     value="40.0" /> <!-- 地图的x轴大小 -->
@@ -45,12 +45,12 @@
     <node pkg="rviz" type="rviz" name="rviz" args="-d $(find form_nav)/rviz/kinoA*_mpc.rviz" />
 
     <!-- 切换模式，解锁 -->
-    <!-- <include file="$(find form_nav)/launch/uav_base.launch" >
+    <include file="$(find form_nav)/launch/uav_base.launch" >
         <param name="uav_id" value="uav0" />
-    </include> -->
+    </include>
 
     <!-- 全局规划器-->
-    <!-- <include file="$(find form_nav)/launch/kino_astar_grid.launch" /> -->
+    <include file="$(find form_nav)/launch/kino_astar_grid.launch" /> <!-- 规划起点硬编码偏移，后期修改 -->
 
     <!-- 单机局部 MPC（第一阶段暂不启用 LMPC 稳定性约束）。 -->
     <!-- <include file="$(find form_nav)/launch/mpc_esdf.launch" /> -->

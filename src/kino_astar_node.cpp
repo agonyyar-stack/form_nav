@@ -18,7 +18,7 @@ nav_msgs::Odometry::ConstPtr odom_;
 std::vector<Eigen::Vector3d> path;
 
 void OdomCallback(const nav_msgs::Odometry::ConstPtr& odom)
-{
+{ 
   odom_ = odom;
 }
 
@@ -31,7 +31,7 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
   }
 
   Eigen::Vector3d end_pt(msg->pose.position.x, msg->pose.position.y, 1.0);
-  Eigen::Vector3d start_pt(odom_->pose.pose.position.x, odom_->pose.pose.position.y, odom_->pose.pose.position.z);
+  Eigen::Vector3d start_pt(odom_->pose.pose.position.x - 23, odom_->pose.pose.position.y, odom_->pose.pose.position.z);
   Eigen::Vector3d start_vel(odom_->twist.twist.linear.x, odom_->twist.twist.linear.y, odom_->twist.twist.linear.z);
   Eigen::Vector3d end_vel(0, 0, 0);
   std::cout << "Start point: " << start_pt.transpose() << std::endl;
