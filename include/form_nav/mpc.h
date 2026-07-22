@@ -97,12 +97,6 @@ private: //存储了 MPC 算法运行时的配置和状态
     // 全局轨迹
     std::vector<GlobalWaypoint> global_traj_;
     bool has_global_traj_;
-    // 缓存的各维度插值器 (grid = 路径点索引 0..n-1)
-    std::unique_ptr<casadi::Function> traj_interp_x_, traj_interp_y_;
-    std::unique_ptr<casadi::Function> traj_interp_z_, traj_interp_yaw_;
-    std::unique_ptr<casadi::Function> traj_interp_vx_, traj_interp_vy_;
-    std::unique_ptr<casadi::Function> traj_interp_vz_, traj_interp_vyaw_;
-
 public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     Mpc();
     ~Mpc();
@@ -124,19 +118,17 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 设置 kinodynamic A* 输出的全局轨迹
     void setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj);
 
-    /// 获取全局参考轨迹在时刻 t 的状态
-    /// t 为轨迹累计时间 (s)
-    /// 返回 8x1: [x, y, z, yaw, vx, vy, vz, vyaw]
-    MX globalTrajectory(MX t);
+    /// 对全局参考轨迹进行数值线性插值，超出时间范围时保持首/末点
+    GlobalWaypoint interpolateGlobalTrajectory(double t) const;
 
-    ErrorTerms formationError(int k_step, MX t, std::map<int, MX>& neighbor_params, MX current_states); //编队误差
+    ErrorTerms formationError(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states); //编队误差
 
-    MX ViLmpcDot(int k_step, MX t, std::map<int, MX>& neighbor_params, MX current_states, MX U_k); //李雅普诺夫函数导数
+    MX ViLmpcDot(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states, MX U_k); //李雅普诺夫函数导数
 
     /// 基于 ESDF 的障碍物避障项 (替代原来的 obstacleAvoidance)
     MX esdfObstacleAvoidance(MX current_states);
 
-    MX collisionAvoidance(MX t, int k_step, std::map<int, MX>& neighbor_params, MX current_states); //编队内碰撞避让项
+    MX collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& neighbor_params, MX current_states); //编队内碰撞避让项
 
     bool solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states); //求解优化问题
 

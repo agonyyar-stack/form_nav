@@ -138,9 +138,8 @@ double findClosestWaypointTime(const Eigen::VectorXd& state) {
 
 // ========== MAVROS 回调 ==========
 void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
-    // Kinodynamic A*、点云和 MPC 统一使用 MAVROS 的 world 坐标，不再
-    // 使用原先未说明来源的固定 x 偏移。
-    current_mpc_state(0) = msg->pose.position.x;
+    // 转换为world坐标系下的状态量，这里的 x/y/z 是世界坐标系下的位置
+    current_mpc_state(0) = msg->pose.position.x - 23.0; //=================后面需参数化，包括邻居的状态量===============
     current_mpc_state(1) = msg->pose.position.y;
     current_mpc_state(2) = msg->pose.position.z;
     has_pose = true;

@@ -5,7 +5,7 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
-        - /Grid1
+        - /globalcloud1
         - /kinoA*1
         - /kinoA*1/kinoA*_path_nodes1
         - /UAV01
@@ -82,7 +82,7 @@ Visualization Manager:
       Axis: Z
       Channel Name: z
       Class: rviz/PointCloud2
-      Color: 178; 178; 206
+      Color: 174; 163; 125
       Color Transformer: FlatColor
       Decay Time: 0
       Enabled: true
@@ -277,9 +277,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.0047962665557861
+      Pitch: 0.824796199798584
       Target Frame: <Fixed Frame>
-      Yaw: 4.73856258392334
+      Yaw: 4.648565292358398
     Saved: ~
 Window Geometry:
   Displays:

@@ -7,5 +7,5 @@
   所以打算参考～/catkin_ws/src/form_nav/Mapless Collision-Free Flight via MPC using Dual KD-Trees in Cluttered.pdf所示的论文提出的方法，利用当前状态->建立 obatacle KD-tree->根据当前参考点查询最近障碍点->构造 MPC
   cost->IPOPT 优化这种方式来处理障碍物距离惩罚。然后由此有了一个想法是用采样的思想先为mpc找到一个较好的预测初始值（因为考虑到虽然全局路径已经提供了一个初始值，但是对每个无人机做路径偏移
   时很大概率会穿过障碍物以及编队规划的需求还有动态障碍物使这个初始值不再适用），如果这个方法可以减少e整体的计算量的话就可以使用。自己的算法文件路径为/home/raner/catkin_ws/src/
-  form_nav，然后参考的论文算法代码路径为/home/raner/catkin_ws/src/Avoid-MPC。鉴于算法一直报错，所以重新按“单无人机mpc仅跟踪全局路径->编队跟踪->加入kdtree，mpc加入静态避障->加入动态避障->加入稳定性约束->加入主动提供较好mpc优化初始值"的步骤完成算法编写，每一步先能跑通再进行下一步算法的完善。
+  form_nav，然后参考的论文算法代码路径为/home/raner/catkin_ws/src/Avoid-MPC。鉴于算法一直报错，所以重新按“1.单无人机mpc仅跟踪全局路径->2.编队跟踪->3.加入kdtree，mpc加入静态避障->4.加入动态避障->5.加入稳定性约束->6.加入主动提供较好mpc优化初始值"的步骤完成算法编写，每一步先能跑通再进行下一步算法的完善。
 要求：现在启动test.launch文件后，终端报错：

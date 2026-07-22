@@ -26,10 +26,10 @@ void KinoAstar::setParam(ros::NodeHandle& nh)
   path_node_marker_.type = visualization_msgs::Marker::SPHERE_LIST;
   path_node_marker_.action = visualization_msgs::Marker::ADD;
   path_node_marker_.pose.orientation.w = 1.0;
-  path_node_marker_.scale.x = 0.3;
-  path_node_marker_.scale.y = 0.3;
-  path_node_marker_.scale.z = 0.3;
-  path_node_marker_.color.a = 1.0;
+  path_node_marker_.scale.x = 0.1;
+  path_node_marker_.scale.y = 0.1;
+  path_node_marker_.scale.z = 0.1;
+  path_node_marker_.color.a = 0.8;
   path_node_marker_.color.r = 1.0;
   path_node_marker_.color.g = 0.0;
   path_node_marker_.color.b = 0.0;
@@ -123,8 +123,6 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
         std::cout << "total_cost_J: " << current_node->g_cost + tmp_cost << std::endl;
         current_node->duration = optimal_time;
         std::vector<KinoAstarNodePtr> path_pool = retrievePath(current_node, path_nodes_list);
-        path_nodes_list.push_back(end_pt);
-        visPathNodes(path_nodes_list);
         switch (collision_check_type_)
         {
           case 1:  // grid map check
@@ -139,6 +137,7 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
             break;
           }
         }
+        visPathNodes(path);  // 用密集采样后的路径点来可视化球体
         return REACH_END;
       }
       else if (current_node->parent != NULL)
