@@ -112,6 +112,22 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 设置编队偏移量表
     void setFormationOffsets(const std::map<int, std::vector<double>>& offsets) { formation_offsets_ = offsets; }
 
+    // --- 可参数化的 MPC 配置 ---
+    /// 设置预测步长 (horizon)
+    void setPredictionHorizon(int N) { N_ = N; }
+    /// 设置时间步长 (s)
+    void setTimeStep(double dt) { dt_ = dt; }
+    /// 设置线速度/线加速度上限, 自动更新下限
+    void setMaxVelocity(double u_max) { u_max_ = u_max; u_min_ = -u_max; }
+    /// 设置角速度/角加速度上限, 自动更新下限
+    void setMaxAngularVelocity(double w_max) { w_max_ = w_max; w_min_ = -w_max; }
+    /// 设置障碍物安全距离 (m)
+    void setObstacleSafeDistance(double d) { d_safe_oa = d; }
+    /// 设置障碍物临界距离 (m)
+    void setObstacleCriticalDistance(double d) { d_critical_oa = d; }
+    /// 设置编队内安全距离 (m)
+    void setCollisionSafeDistance(double d) { d_safe_ca = d; }
+
     /// 设置 ESDF CasADi 插值器
     void setEsdf(EsdfCasadi* esdf) { esdf_ptr_ = esdf; }
 

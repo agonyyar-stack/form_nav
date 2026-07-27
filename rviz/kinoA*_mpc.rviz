@@ -5,10 +5,8 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
-        - /globalcloud1
-        - /kinoA*1
         - /kinoA*1/kinoA*_path_nodes1
-        - /UAV01
+        - /UAV01/Recorded_Path1
         - /UAV01/MPC1
         - /UAV01/MPC1/mpc_trajectory1
       Splitter Ratio: 0.5024154782295227
@@ -70,7 +68,7 @@ Visualization Manager:
       Marker Topic: /kino_astar/goal_marker
       Name: GoalPoint
       Namespaces:
-        {}
+        kino_astar/goal: true
       Queue Size: 100
       Value: true
     - Alpha: 1
@@ -82,7 +80,7 @@ Visualization Manager:
       Axis: Z
       Channel Name: z
       Class: rviz/PointCloud2
-      Color: 174; 163; 125
+      Color: 146; 137; 119
       Color Transformer: FlatColor
       Decay Time: 0
       Enabled: true
@@ -136,7 +134,7 @@ Visualization Manager:
           Marker Topic: /kino_astar/path_marker
           Name: kinoA*_path_marker
           Namespaces:
-            {}
+            kino_astar/path: true
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
@@ -144,7 +142,7 @@ Visualization Manager:
           Marker Topic: /kino_astar_node/kino_astar_path_nodes
           Name: kinoA*_path_nodes
           Namespaces:
-            {}
+            "": true
           Queue Size: 100
           Value: true
       Enabled: true
@@ -170,13 +168,13 @@ Visualization Manager:
         - Alpha: 1
           Buffer Length: 1
           Class: rviz/Path
-          Color: 25; 255; 0
+          Color: 78; 154; 6
           Enabled: true
           Head Diameter: 0.30000001192092896
           Head Length: 0.20000000298023224
           Length: 0.30000001192092896
-          Line Style: Lines
-          Line Width: 0.029999999329447746
+          Line Style: Billboards
+          Line Width: 0.05000000074505806
           Name: Recorded_Path
           Offset:
             X: 0
@@ -226,7 +224,8 @@ Visualization Manager:
               Marker Topic: /uav0/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -261,7 +260,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 51.76482391357422
+      Distance: 63.48075866699219
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -269,17 +268,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -1.586034893989563
-        Y: 0.8803576827049255
-        Z: -8.670969009399414
+        X: -0.8277456164360046
+        Y: 0.22577375173568726
+        Z: -8.992837905883789
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.824796199798584
+      Pitch: 1.4097964763641357
       Target Frame: <Fixed Frame>
-      Yaw: 4.648565292358398
+      Yaw: 4.683565139770508
     Saved: ~
 Window Geometry:
   Displays:

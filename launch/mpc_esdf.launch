@@ -23,6 +23,15 @@
         <param name="my_id" value="0" />
         <param name="is_tracked" value="true" />
         <param name="tracking_model" value="1" />
+
+        <!-- MPC 可调参数 -->
+        <param name="mpc/N" value="10" />               <!-- 预测步长 -->
+        <param name="mpc/dt" value="0.05" />             <!-- 时间步长 (s) -->
+        <param name="mpc/u_max" value="6.0" />           <!-- 线速度/加速度上限 -->
+        <param name="mpc/w_max" value="2.0" />           <!-- 角速度/加速度上限 -->
+        <param name="mpc/d_safe_oa" value="0.6" />       <!-- 障碍物安全距离 (m) -->
+        <param name="mpc/d_critical_oa" value="0.3" />   <!-- 障碍物临界距离 (m) -->
+        <param name="mpc/d_safe_ca" value="0.3" />       <!-- 编队内安全距离 (m) -->
         <!-- <rosparam param="neighbor_ids">[1, 2]</rosparam> -->
         <rosparam param="formation_offsets">
           "0": [0, 0, 0, 0]

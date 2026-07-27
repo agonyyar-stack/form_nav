@@ -318,11 +318,19 @@ int main(int argc, char **argv) {
 
     try {
     // --- 参数读取 ---
-    int my_id = nh_private.param<int>("my_id", 0);
-    UAV_NAME = "uav" + std::to_string(my_id);
-    bool is_tracked = nh_private.param<bool>("is_tracked", false);
+    int my_id          = nh_private.param<int>("my_id", 0);
+    bool is_tracked    = nh_private.param<bool>("is_tracked", false);
     int tracking_model = nh_private.param<int>("tracking_model", 1);
     std::vector<int> neighbor_ids = nh_private.param<std::vector<int>>("neighbor_ids", std::vector<int>());
+    int   N      = nh_private.param<int>("mpc/N", 10);
+    double dt    = nh_private.param<double>("mpc/dt", 0.05);
+    double u_max = nh_private.param<double>("mpc/u_max", 6.0);
+    double w_max = nh_private.param<double>("mpc/w_max", 2.0);
+    double d_safe_oa = nh_private.param<double>("mpc/d_safe_oa", 0.6);
+    double d_crit_oa = nh_private.param<double>("mpc/d_critical_oa", 0.3);
+    double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.3);
+
+    UAV_NAME = "uav" + std::to_string(my_id);
 
     // 编队偏移量表 {id → [x, y, z, yaw]}
     std::map<int, std::vector<double>> formation_offsets;
@@ -366,6 +374,19 @@ int main(int argc, char **argv) {
     mpc_ptr->setTracked(is_tracked);
     mpc_ptr->setTrackingModel(tracking_model);
     mpc_ptr->setFormationOffsets(formation_offsets);
+
+    mpc_ptr->setPredictionHorizon(N);
+    mpc_ptr->setTimeStep(dt);
+    mpc_ptr->setMaxVelocity(u_max);
+    mpc_ptr->setMaxAngularVelocity(w_max);
+    mpc_ptr->setObstacleSafeDistance(d_safe_oa);
+    mpc_ptr->setObstacleCriticalDistance(d_crit_oa);
+    mpc_ptr->setCollisionSafeDistance(d_safe_ca);
+
+    ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
+             "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f",
+             UAV_NAME.c_str(), N, dt, u_max, w_max,
+             d_safe_oa, d_crit_oa, d_safe_ca);
 
     // 第一阶段不使用障碍物代价，暂时停用 ESDF 地图初始化；原代码保留。
 #if 0

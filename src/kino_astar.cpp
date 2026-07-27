@@ -319,14 +319,14 @@ double KinoAstar::getHeuristicCost(Eigen::Vector3d x1, Eigen::Vector3d v1, Eigen
   Eigen::Vector3d dp = x2 - x1;
   double optimal_cost = inf;
 
-  double a = -36 * dp.dot(dp);
+  double a = -36 * dp.dot(dp); //.dot函数的作用是计算两个向量的点积，返回一个标量值，表示两个向量在同一方向上的投影长度的乘积。
   double b = 24 * dp.dot(v1 + v2);
   double c = -4 * (v1.dot(v1) + v1.dot(v2) + v2.dot(v2));
   double d = 0;
   double e = rou_;
 
-  std::vector<double> dts = quartic(e, d, c, b, a);
-  double T_bar = ((x1 - x2).lpNorm<Eigen::Infinity>() / max_vel_);
+  std::vector<double> dts = quartic(e, d, c, b, a); // 自定义函数，求解四次方程的实数根，返回一个包含所有实数根的向量dts（T_h）
+  double T_bar = ((x1 - x2).lpNorm<Eigen::Infinity>() / max_vel_); // lpNorm<Eigen::Infinity>()函数用于计算向量的无穷范数，即向量中绝对值最大的元素。这里计算的是从x1到x2的距离除以最大速度，得到一个时间下界T_bar。
   for (int i = 0; i < dts.size(); i++)
   {
     double t = dts[i];
@@ -337,7 +337,7 @@ double KinoAstar::getHeuristicCost(Eigen::Vector3d x1, Eigen::Vector3d v1, Eigen
       optimal_time = t;
     }
   }
-  return tie_breaker_ * optimal_cost;
+  return tie_breaker_ * optimal_cost; //tie_breaker_是一个用于调整启发式代价的系数，通常用于A*算法中，以避免在搜索过程中出现平局情况。
 }
 
 std::vector<double> KinoAstar::cubic(double a, double b, double c, double d)
@@ -374,7 +374,7 @@ std::vector<double> KinoAstar::cubic(double a, double b, double c, double d)
     return dts;
   }
 }
-
+// 函数功能：求解四次方程的实数根
 std::vector<double> KinoAstar::quartic(double a, double b, double c, double d, double e)
 {
   std::vector<double> dts;

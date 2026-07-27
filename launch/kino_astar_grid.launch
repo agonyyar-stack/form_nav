@@ -32,8 +32,8 @@
     <param name="kino_astar/allocated_node_num" value="100000"/> <!-- 允许分配的最大搜索节点数 -->
     <param name="kino_astar/goal_tolerance" value="2.0"/> <!-- 终点接近阈值，决定何时认为到达目标 -->
     <param name="kino_astar/time_step_size" value="0.03"/> <!-- 状态传播和采样的时间步长 -->
-    <param name="kino_astar/max_velocity" value="7.0"/> <!-- 速度上限 -->
-    <param name="kino_astar/max_accelration" value="10.0"/> <!-- 加速度上限 -->
+    <param name="kino_astar/max_velocity" value="6.0"/> <!-- 速度上限 -->
+    <param name="kino_astar/max_accelration" value="8.0"/> <!-- 加速度上限 -->
     <param name="kino_astar/acc_resolution" value="4.0"/> <!-- 加速度采样分辨率，影响扩展节点数量 -->
     <param name="kino_astar/sample_tau" value="0.3"/> <!-- 每一步的扩展时间长度 -->
 
