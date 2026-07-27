@@ -1,5 +1,9 @@
 #include <form_nav/kino_astar.h>
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 namespace path_searching
 {
 
@@ -82,8 +86,24 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
                       Eigen::Vector3d end_vel, std::vector<Eigen::Vector3d>& path)
 {
   ros::Time start_time = ros::Time::now();
+  path.clear();
+  path_velocities_.clear();
+  path_times_.clear();
+  rot_list.clear();
+
+  if (max_vel_ <= 0.0 || max_accel_ <= 0.0 || step_size_ <= 0.0 || sample_tau_ <= 0.0 || acc_res_ <= 0.0)
+  {
+    ROS_ERROR("Invalid kinodynamic A* parameters: velocity, acceleration, time steps and acceleration resolution must be positive.");
+    return NO_PATH_FOUND;
+  }
+  if (path_node_pool_.empty() || use_node_num_ >= allocated_node_num_)
+  {
+    ROS_ERROR("Kinodynamic A* node pool is unavailable. Call init() before search().");
+    return NO_PATH_FOUND;
+  }
+
   double inv_acc_res_ = 1.0 / acc_res_;
-  double optimal_time = inf;
+  double optimal_time = KINO_ASTAR_INF;
   KinoAstarNodePtr start_node = path_node_pool_[use_node_num_];
   start_node->position = start_pt;
   start_node->velocity = start_vel;
@@ -111,7 +131,8 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
     // check if near goal
     if ((current_node->position - end_pt).norm() < goal_tolerance_)
     {
-      double tmp_cost = lambda_heu_ * (current_node->position, current_node->velocity, end_pt, end_vel, optimal_time);
+      double tmp_cost = lambda_heu_ *
+                        getHeuristicCost(current_node->position, current_node->velocity, end_pt, end_vel, optimal_time);
       bool shot_path_found =
           computeShotTraj(current_node->position, current_node->velocity, end_pt, end_vel, optimal_time);
       // std::cout << "optimal_time: " << optimal_time << std::endl;
@@ -165,12 +186,12 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
           x0.tail(3) = current_node->velocity;
           Eigen::Matrix<double, 6, 1> xt;
 
-          int segment_num = std::floor(sample_tau_ / step_size_);
+          int segment_num = std::max(1, static_cast<int>(std::ceil(sample_tau_ / step_size_)));
           bool flag = false;
           bool collision_flag = false;
           for (int i = 0; i <= segment_num; i++)
           {
-            double t = i * step_size_;
+            double t = sample_tau_ * static_cast<double>(i) / static_cast<double>(segment_num);
             StateTransit(x0, xt, ut, t);
             Eigen::Vector3d tmp_pos = xt.head(3);
             // check collision and if out of map
@@ -280,9 +301,9 @@ void KinoAstar::reset()
   for (int i = 0; i < use_node_num_; i++)
   {
     KinoAstarNodePtr node = path_node_pool_[i];
-    node->g_cost = inf;
-    node->f_cost = inf;
-    node->duration = inf;
+    node->g_cost = KINO_ASTAR_INF;
+    node->f_cost = KINO_ASTAR_INF;
+    node->duration = KINO_ASTAR_INF;
     node->input = Eigen::Vector3d::Zero();
     node->parent = NULL;
     node->node_state = NOT_EXPANDED_;
@@ -297,8 +318,8 @@ void KinoAstar::reset()
   shot_coef_ = Eigen::Matrix<double, 3, 4>::Zero();
   vel_coef_ = Eigen::Matrix<double, 3, 4>::Zero();
   acc_coef_ = Eigen::Matrix<double, 3, 4>::Zero();
-
-  path_node_pool_.clear();
+  path_velocities_.clear();
+  path_times_.clear();
 
   use_node_num_ = 0;
 }
@@ -316,8 +337,9 @@ Eigen::Vector3i KinoAstar::posToIndex(Eigen::Vector3d pos)
 double KinoAstar::getHeuristicCost(Eigen::Vector3d x1, Eigen::Vector3d v1, Eigen::Vector3d x2, Eigen::Vector3d v2,
                                    double& optimal_time)
 {
+  constexpr double kTimeEpsilon = 1e-3;
   Eigen::Vector3d dp = x2 - x1;
-  double optimal_cost = inf;
+  double optimal_cost = KINO_ASTAR_INF;
 
   double a = -36 * dp.dot(dp); //.dot函数的作用是计算两个向量的点积，返回一个标量值，表示两个向量在同一方向上的投影长度的乘积。
   double b = 24 * dp.dot(v1 + v2);
@@ -326,16 +348,27 @@ double KinoAstar::getHeuristicCost(Eigen::Vector3d x1, Eigen::Vector3d v1, Eigen
   double e = rou_;
 
   std::vector<double> dts = quartic(e, d, c, b, a); // 自定义函数，求解四次方程的实数根，返回一个包含所有实数根的向量dts（T_h）
-  double T_bar = ((x1 - x2).lpNorm<Eigen::Infinity>() / max_vel_); // lpNorm<Eigen::Infinity>()函数用于计算向量的无穷范数，即向量中绝对值最大的元素。这里计算的是从x1到x2的距离除以最大速度，得到一个时间下界T_bar。
-  for (int i = 0; i < dts.size(); i++)
+  double T_bar = std::max(dp.lpNorm<Eigen::Infinity>() / max_vel_, kTimeEpsilon); // lpNorm<Eigen::Infinity>()函数用于计算向量的无穷范数，即向量中绝对值最大的元素。这里计算的是从x1到x2的距离除以最大速度，得到一个时间下界T_bar。
+  dts.push_back(T_bar);
+  optimal_time = T_bar;
+
+  for (double t : dts)
   {
-    double t = dts[i];
-    double tmp_cost = a / (-3 * t * t * t) + b / (-2 * t * t) + c / (-1 * t) + e * t;
-    if (tmp_cost < optimal_cost && t > T_bar && tmp_cost > 0)
+    if (!std::isfinite(t) || t < T_bar || t <= 0.0)
+      continue;
+
+    double tmp_cost = -a / (3 * t * t * t) - b / (2 * t * t) - c / t + e * t;
+    if (std::isfinite(tmp_cost) && tmp_cost >= 0.0 && tmp_cost < optimal_cost)
     {
       optimal_cost = tmp_cost;
       optimal_time = t;
     }
+  }
+
+  if (!std::isfinite(optimal_cost))
+  {
+    optimal_time = T_bar;
+    optimal_cost = -a / (3 * T_bar * T_bar * T_bar) - b / (2 * T_bar * T_bar) - c / T_bar + e * T_bar;
   }
   return tie_breaker_ * optimal_cost; //tie_breaker_是一个用于调整启发式代价的系数，通常用于A*算法中，以避免在搜索过程中出现平局情况。
 }
@@ -343,6 +376,10 @@ double KinoAstar::getHeuristicCost(Eigen::Vector3d x1, Eigen::Vector3d v1, Eigen
 std::vector<double> KinoAstar::cubic(double a, double b, double c, double d)
 {
   std::vector<double> dts;
+  constexpr double kRootEpsilon = 1e-10;
+
+  if (std::abs(a) < kRootEpsilon)
+    return dts;
 
   double a2 = b / a;
   double a1 = c / a;
@@ -351,14 +388,14 @@ std::vector<double> KinoAstar::cubic(double a, double b, double c, double d)
   double Q = (3 * a1 - a2 * a2) / 9;
   double R = (9 * a1 * a2 - 27 * a0 - 2 * a2 * a2 * a2) / 54;
   double D = Q * Q * Q + R * R;
-  if (D > 0)
+  if (D > kRootEpsilon)
   {
     double S = std::cbrt(R + sqrt(D));
     double T = std::cbrt(R - sqrt(D));
     dts.push_back(-a2 / 3 + (S + T));
     return dts;
   }
-  else if (D == 0)
+  else if (std::abs(D) <= kRootEpsilon)
   {
     double S = std::cbrt(R);
     dts.push_back(-a2 / 3 + S + S);
@@ -367,7 +404,10 @@ std::vector<double> KinoAstar::cubic(double a, double b, double c, double d)
   }
   else
   {
-    double theta = acos(R / sqrt(-Q * Q * Q));
+    double denominator = sqrt(std::max(0.0, -Q * Q * Q));
+    if (denominator < kRootEpsilon)
+      return dts;
+    double theta = acos(std::max(-1.0, std::min(1.0, R / denominator)));
     dts.push_back(2 * sqrt(-Q) * cos(theta / 3) - a2 / 3);
     dts.push_back(2 * sqrt(-Q) * cos((theta + 2 * M_PI) / 3) - a2 / 3);
     dts.push_back(2 * sqrt(-Q) * cos((theta + 4 * M_PI) / 3) - a2 / 3);
@@ -378,6 +418,10 @@ std::vector<double> KinoAstar::cubic(double a, double b, double c, double d)
 std::vector<double> KinoAstar::quartic(double a, double b, double c, double d, double e)
 {
   std::vector<double> dts;
+  constexpr double kRootEpsilon = 1e-10;
+
+  if (std::abs(a) < kRootEpsilon)
+    return dts;
 
   double a3 = b / a;
   double a2 = c / a;
@@ -385,30 +429,47 @@ std::vector<double> KinoAstar::quartic(double a, double b, double c, double d, d
   double a0 = e / a;
 
   std::vector<double> ys = cubic(1, -a2, a1 * a3 - 4 * a0, 4 * a2 * a0 - a1 * a1 - a3 * a3 * a0);
+  if (ys.empty())
+    return dts;
   double y1 = ys.front();
   double r = a3 * a3 / 4 - a2 + y1;
-  if (r < 0)
+  if (r < -kRootEpsilon)
     return dts;
 
-  double R = sqrt(r);
-  double D, E;
-  if (R != 0)
+  double R = sqrt(std::max(0.0, r));
+  double D = std::numeric_limits<double>::quiet_NaN();
+  double E = std::numeric_limits<double>::quiet_NaN();
+  if (R > kRootEpsilon)
   {
-    D = sqrt(0.75 * a3 * a3 - R * R - 2 * a2 + 0.25 * (4 * a3 * a2 - 8 * a1 - a3 * a3 * a3) / R);
-    E = sqrt(0.75 * a3 * a3 - R * R - 2 * a2 - 0.25 * (4 * a3 * a2 - 8 * a1 - a3 * a3 * a3) / R);
+    double d_radicand =
+        0.75 * a3 * a3 - R * R - 2 * a2 + 0.25 * (4 * a3 * a2 - 8 * a1 - a3 * a3 * a3) / R;
+    double e_radicand =
+        0.75 * a3 * a3 - R * R - 2 * a2 - 0.25 * (4 * a3 * a2 - 8 * a1 - a3 * a3 * a3) / R;
+    if (d_radicand >= -kRootEpsilon)
+      D = sqrt(std::max(0.0, d_radicand));
+    if (e_radicand >= -kRootEpsilon)
+      E = sqrt(std::max(0.0, e_radicand));
   }
   else
   {
-    D = sqrt(0.75 * a3 * a3 - 2 * a2 + 2 * sqrt(y1 * y1 - 4 * a0));
-    E = sqrt(0.75 * a3 * a3 - 2 * a2 - 2 * sqrt(y1 * y1 - 4 * a0));
+    double inner_radicand = y1 * y1 - 4 * a0;
+    if (inner_radicand < -kRootEpsilon)
+      return dts;
+    double inner = sqrt(std::max(0.0, inner_radicand));
+    double d_radicand = 0.75 * a3 * a3 - 2 * a2 + 2 * inner;
+    double e_radicand = 0.75 * a3 * a3 - 2 * a2 - 2 * inner;
+    if (d_radicand >= -kRootEpsilon)
+      D = sqrt(std::max(0.0, d_radicand));
+    if (e_radicand >= -kRootEpsilon)
+      E = sqrt(std::max(0.0, e_radicand));
   }
 
-  if (!std::isnan(D))
+  if (std::isfinite(D))
   {
     dts.push_back(-a3 / 4 + R / 2 + D / 2);
     dts.push_back(-a3 / 4 + R / 2 - D / 2);
   }
-  if (!std::isnan(E))
+  if (std::isfinite(E))
   {
     dts.push_back(-a3 / 4 - R / 2 + E / 2);
     dts.push_back(-a3 / 4 - R / 2 - E / 2);
@@ -437,11 +498,11 @@ bool KinoAstar::computeShotTraj(Eigen::Vector3d x1, Eigen::Vector3d v1, Eigen::V
 
   Eigen::Matrix<double, 4, 1> t_vector;
 
-  int segment_num = std::floor(td / step_size_);
+  int segment_num = std::max(1, static_cast<int>(std::ceil(td / step_size_)));
   double curr_t = 0.0;
   for (int j = 0; j <= segment_num; j++)
   {
-    curr_t = j * step_size_;
+    curr_t = td * static_cast<double>(j) / static_cast<double>(segment_num);
     for (int i = 0; i < 4; i++)
     {
       t_vector(i) = pow(curr_t, i);
@@ -529,11 +590,11 @@ void KinoAstar::samplePath(std::vector<KinoAstarNodePtr> path_pool, std::vector<
 
     Eigen::Matrix<double, 4, 1> t_vector;
 
-    int segment_num = std::floor(td / step_size_);
+    int segment_num = std::max(1, static_cast<int>(std::ceil(td / step_size_)));
     double curr_t = 0.0;
     for (int j = 0; j <= segment_num; j++)
     {
-      curr_t = j * step_size_;
+      curr_t = td * static_cast<double>(j) / static_cast<double>(segment_num);
       for (int i = 0; i < 4; i++)
       {
         t_vector(i) = pow(curr_t, i);
@@ -541,8 +602,7 @@ void KinoAstar::samplePath(std::vector<KinoAstarNodePtr> path_pool, std::vector<
 
       Eigen::Vector3d shot_pos = shot_coef_ * t_vector;
       path.push_back(shot_pos);
-      Eigen::Vector4d t_deriv(0, 1, 2*curr_t, 3*curr_t*curr_t);
-      path_velocities_.push_back(vel_coef_ * t_deriv);
+      path_velocities_.push_back(vel_coef_ * t_vector);
       path_times_.push_back(cum_time + curr_t);
     }
   }
@@ -553,11 +613,11 @@ void KinoAstar::samplePath(std::vector<KinoAstarNodePtr> path_pool, std::vector<
 
     Eigen::Matrix<double, 4, 1> t_vector;
 
-    int segment_num = std::floor(td / step_size_);
+    int segment_num = std::max(1, static_cast<int>(std::ceil(td / step_size_)));
     double curr_t = 0.0;
     for (int j = 0; j <= segment_num; j++)
     {
-      curr_t = j * step_size_;
+      curr_t = td * static_cast<double>(j) / static_cast<double>(segment_num);
       for (int i = 0; i < 4; i++)
       {
         t_vector(i) = pow(curr_t, i);
@@ -565,8 +625,7 @@ void KinoAstar::samplePath(std::vector<KinoAstarNodePtr> path_pool, std::vector<
 
       Eigen::Vector3d shot_pos = shot_coef_ * t_vector;
       path.push_back(shot_pos);
-      Eigen::Vector4d t_deriv(0, 1, 2*curr_t, 3*curr_t*curr_t);
-      path_velocities_.push_back(vel_coef_ * t_deriv);
+      path_velocities_.push_back(vel_coef_ * t_vector);
       path_times_.push_back(cum_time + curr_t);
     }
   }
@@ -608,11 +667,11 @@ void KinoAstar::sampleEllipsoid(std::vector<KinoAstarNodePtr> path_pool, std::ve
 
     Eigen::Matrix<double, 4, 1> t_vector;
 
-    int segment_num = std::floor(td / step_size_);
+    int segment_num = std::max(1, static_cast<int>(std::ceil(td / step_size_)));
     double curr_t = 0.0;
     for (int j = 0; j <= segment_num; j++)
     {
-      curr_t = j * step_size_;
+      curr_t = td * static_cast<double>(j) / static_cast<double>(segment_num);
       for (int i = 0; i < 4; i++)
       {
         t_vector(i) = pow(curr_t, i);
@@ -639,11 +698,11 @@ void KinoAstar::sampleEllipsoid(std::vector<KinoAstarNodePtr> path_pool, std::ve
 
     Eigen::Matrix<double, 4, 1> t_vector;
 
-    int segment_num = std::floor(td / step_size_);
+    int segment_num = std::max(1, static_cast<int>(std::ceil(td / step_size_)));
     double curr_t = 0.0;
     for (int j = 0; j <= segment_num; j++)
     {
-      curr_t = j * step_size_;
+      curr_t = td * static_cast<double>(j) / static_cast<double>(segment_num);
       for (int i = 0; i < 4; i++)
       {
         t_vector(i) = pow(curr_t, i);
@@ -791,9 +850,9 @@ PCLPointCloud KinoAstar::toPCL(const std::vector<Eigen::Vector3d>& obs)
 
 KinoAstar::~KinoAstar()
 {
-  for (int i = 0; i < allocated_node_num_; i++)
+  for (KinoAstarNodePtr node : path_node_pool_)
   {
-    delete path_node_pool_[i];
+    delete node;
   }
 }
 

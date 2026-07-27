@@ -3,6 +3,7 @@
 
 #include <ros/ros.h>
 #include <Eigen/Eigen>
+#include <limits>
 #include <queue>
 #include <unordered_map>
 #include <pcl/kdtree/kdtree_flann.h>
@@ -19,10 +20,11 @@ typedef pcl::PointXYZ PCLPoint;
 typedef pcl::PointCloud<PCLPoint> PCLPointCloud;
 typedef pcl::KdTreeFLANN<PCLPoint> KdTree; 
 
-#define inf (1 << 30);
 #define IN_OPEN_LIST_ 'a';
 #define IN_CLOSE_LIST_ 'b';
 #define NOT_EXPANDED_ 'c';
+
+constexpr double KINO_ASTAR_INF = std::numeric_limits<double>::infinity();
 
 class KinoAstarNode
 {
@@ -39,10 +41,10 @@ public:
 
   KinoAstarNode()
   {
-    g_cost = inf;
-    f_cost = inf;
+    g_cost = KINO_ASTAR_INF;
+    f_cost = KINO_ASTAR_INF;
     parent = NULL;
-    duration = inf;
+    duration = KINO_ASTAR_INF;
     input = Eigen::Vector3d::Zero();
     node_state = NOT_EXPANDED_;
   }
