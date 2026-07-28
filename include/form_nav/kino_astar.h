@@ -126,6 +126,8 @@ private:
   std::vector<Eigen::Matrix3d> rot_list;
   std::vector<Eigen::Vector3d> path_velocities_;  // 与path同步采样速度
   std::vector<double> path_times_;                // 与path同步累计时间
+  std::vector<Eigen::Vector3d> acceleration_inputs_;
+  std::vector<double> primitive_sample_times_;
 
   /* main search parameters */
   int allocated_node_num_;
@@ -184,7 +186,8 @@ private:
   void samplePath(std::vector<KinoAstarNodePtr> path_pool, std::vector<Eigen::Vector3d>& path);
   void sampleEllipsoid(std::vector<KinoAstarNodePtr> path_pool, std::vector<Eigen::Vector3d>& path,
                        std::vector<Eigen::Matrix3d>& rot_list);
-  void StateTransit(Eigen::Matrix<double, 6, 1>& x0, Eigen::Matrix<double, 6, 1>& xt, Eigen::Vector3d ut, double dt);
+  void StateTransit(const Eigen::Matrix<double, 6, 1>& x0, Eigen::Matrix<double, 6, 1>& xt,
+                    const Eigen::Vector3d& ut, double dt);
 
   /* main se3 helper functions */
   void localCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg);

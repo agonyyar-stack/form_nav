@@ -72,9 +72,32 @@ void KinoAstar::init()
   this->inv_resolution_ = 1.0 / resolution_;
   this->tie_breaker_ = 1.0 + (3 / 1e4);
 
+  if (max_accel_ <= 0.0 || acc_res_ <= 0.0 || sample_tau_ <= 0.0 || step_size_ <= 0.0)
+  {
+    ROS_ERROR("Cannot initialize kinodynamic A* primitive cache with non-positive parameters.");
+    return;
+  }
+
+  acceleration_inputs_.clear();
+  double acceleration_step = max_accel_ / acc_res_;
+  for (double ax = -max_accel_; ax <= max_accel_ + 1e-3; ax += acceleration_step)
+    for (double ay = -max_accel_; ay <= max_accel_ + 1e-3; ay += acceleration_step)
+      for (double az = -max_accel_; az <= max_accel_ + 1e-3; az += acceleration_step)
+        acceleration_inputs_.emplace_back(ax, ay, az);
+
+  primitive_sample_times_.clear();
+  int primitive_segment_num = std::max(1, static_cast<int>(std::ceil(sample_tau_ / step_size_)));
+  primitive_sample_times_.reserve(primitive_segment_num);
+  for (int sample = 1; sample <= primitive_segment_num; sample++)
+  {
+    primitive_sample_times_.push_back(sample_tau_ * static_cast<double>(sample) /
+                                      static_cast<double>(primitive_segment_num));
+  }
+
   std::cout << "origin: " << origin_.transpose() << std::endl;
   std::cout << "map_size: " << map_size_.transpose() << std::endl;
   std::cout << "allocated_node_num: " << allocated_node_num_ << std::endl;
+  std::cout << "acceleration_input_num: " << acceleration_inputs_.size() << std::endl;
 }
 
 void KinoAstar::setGridMap(GridMap::Ptr& grid_map)
@@ -101,8 +124,12 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
     ROS_ERROR("Kinodynamic A* node pool is unavailable. Call init() before search().");
     return NO_PATH_FOUND;
   }
+  if (acceleration_inputs_.empty() || primitive_sample_times_.empty())
+  {
+    ROS_ERROR("Kinodynamic A* primitive cache is empty. Check parameters and call init() again.");
+    return NO_PATH_FOUND;
+  }
 
-  double inv_acc_res_ = 1.0 / acc_res_;
   double optimal_time = KINO_ASTAR_INF;
   KinoAstarNodePtr start_node = path_node_pool_[use_node_num_];
   start_node->position = start_pt;
@@ -116,7 +143,21 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
   expanded_list_.insert(start_node->index, start_node);
   start_node->node_state = IN_OPEN_LIST_;
 
+  struct PrimitiveCandidate
+  {
+    Eigen::Vector3d position;
+    Eigen::Vector3d velocity;
+    Eigen::Vector3d input;
+    Eigen::Vector3i index;
+    double g_cost;
+    double f_cost;
+  };
+
   std::vector<Eigen::Vector3d> path_nodes_list;
+  std::vector<PrimitiveCandidate> candidates;
+  std::unordered_map<Eigen::Vector3i, size_t, vector3i_hash<Eigen::Vector3i>> candidate_indices;
+  candidates.reserve(acceleration_inputs_.size());
+  candidate_indices.reserve(acceleration_inputs_.size());
 
   while (!open_list_.empty())
   {
@@ -185,96 +226,80 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
       // else continue;
     }
 
-    struct PrimitiveCandidate
-    {
-      Eigen::Vector3d position;
-      Eigen::Vector3d velocity;
-      Eigen::Vector3d input;
-      Eigen::Vector3i index;
-      double g_cost;
-      double f_cost;
-    };
-
-    std::vector<PrimitiveCandidate> candidates;
-    std::unordered_map<Eigen::Vector3i, size_t, vector3i_hash<Eigen::Vector3i>> candidate_indices;
+    candidates.clear();
+    candidate_indices.clear();
     Eigen::Matrix<double, 6, 1> x0;
     x0.head(3) = current_node->position;
     x0.tail(3) = current_node->velocity;
 
     // expand current node and keep only the minimum-f primitive from this parent in each voxel
-    for (double ax = -max_accel_; ax <= max_accel_ + 1e-3; ax += inv_acc_res_ * max_accel_)
-      for (double ay = -max_accel_; ay <= max_accel_ + 1e-3; ay += inv_acc_res_ * max_accel_)
-        for (double az = -max_accel_; az <= max_accel_ + 1e-3; az += inv_acc_res_ * max_accel_)
+    for (const Eigen::Vector3d& ut : acceleration_inputs_)
+    {
+      Eigen::Matrix<double, 6, 1> endpoint_state;
+      StateTransit(x0, endpoint_state, ut, sample_tau_);
+
+      Eigen::Vector3d endpoint_velocity = endpoint_state.tail(3);
+      if ((endpoint_velocity.array().abs() > max_vel_).any())
+        continue;
+
+      Eigen::Vector3d endpoint_position = endpoint_state.head(3);
+      Eigen::Vector3i endpoint_index = posToIndex(endpoint_position);
+      if (endpoint_index == current_node->index || close_list_.find(endpoint_index) != NULL)
+        continue;
+
+      bool primitive_invalid = false;
+      for (double sample_time : primitive_sample_times_)
+      {
+        Eigen::Matrix<double, 6, 1> xt;
+        StateTransit(x0, xt, ut, sample_time);
+        Eigen::Vector3d tmp_pos = xt.head(3);
+        if (!grid_map_->isInMap(tmp_pos))
         {
-          Eigen::Vector3d ut;
-          ut << ax, ay, az;
-          Eigen::Matrix<double, 6, 1> endpoint_state;
-          StateTransit(x0, endpoint_state, ut, sample_tau_);
-
-          Eigen::Vector3d endpoint_velocity = endpoint_state.tail(3);
-          if ((endpoint_velocity.array().abs() > max_vel_).any())
-            continue;
-
-          Eigen::Vector3d endpoint_position = endpoint_state.head(3);
-          Eigen::Vector3i endpoint_index = posToIndex(endpoint_position);
-          if (endpoint_index == current_node->index || close_list_.find(endpoint_index) != NULL)
-            continue;
-
-          int segment_num = std::max(1, static_cast<int>(std::ceil(sample_tau_ / step_size_)));
-          bool primitive_invalid = false;
-          for (int i = 1; i <= segment_num; i++)
-          {
-            double t = sample_tau_ * static_cast<double>(i) / static_cast<double>(segment_num);
-            Eigen::Matrix<double, 6, 1> xt;
-            StateTransit(x0, xt, ut, t);
-            Eigen::Vector3d tmp_pos = xt.head(3);
-            if (!grid_map_->isInMap(tmp_pos))
-            {
-              primitive_invalid = true;
-              break;
-            }
-
-            switch (collision_check_type_)
-            {
-              case 1:  // grid map check
-                if (grid_map_->getInflateOccupancy(tmp_pos) == 1)
-                  primitive_invalid = true;
-                break;
-
-              case 2:  // local cloud check
-                if (!isCollisionFree(tmp_pos, ut))
-                  primitive_invalid = true;
-                break;
-
-              default:
-                primitive_invalid = true;
-                break;
-            }
-            if (primitive_invalid)
-              break;
-          }
-          if (primitive_invalid)
-            continue;
-
-          double candidate_time = 0.0;
-          double candidate_g_cost = current_node->g_cost + (ut.squaredNorm() + rou_) * sample_tau_;
-          double candidate_f_cost =
-              candidate_g_cost +
-              lambda_heu_ * getHeuristicCost(endpoint_position, endpoint_velocity, end_pt, end_vel, candidate_time);
-
-          PrimitiveCandidate candidate{ endpoint_position, endpoint_velocity, ut, endpoint_index, candidate_g_cost,
-                                        candidate_f_cost };
-          auto candidate_iter = candidate_indices.find(endpoint_index);
-          if (candidate_iter == candidate_indices.end())
-          {
-            candidate_indices.emplace(endpoint_index, candidates.size());
-            candidates.push_back(candidate);
-          }
-          else if (candidate_f_cost < candidates[candidate_iter->second].f_cost)
-          {
-            candidates[candidate_iter->second] = candidate;
-          }
+          primitive_invalid = true;
+          break;
         }
+
+        switch (collision_check_type_)
+        {
+          case 1:  // grid map check
+            if (grid_map_->getInflateOccupancy(tmp_pos) == 1)
+              primitive_invalid = true;
+            break;
+
+          case 2:  // local cloud check
+            if (!isCollisionFree(tmp_pos, ut))
+              primitive_invalid = true;
+            break;
+
+          default:
+            primitive_invalid = true;
+            break;
+        }
+        if (primitive_invalid)
+          break;
+      }
+      if (primitive_invalid)
+        continue;
+
+      double candidate_time = 0.0;
+      double candidate_g_cost = current_node->g_cost + (ut.squaredNorm() + rou_) * sample_tau_;
+      double candidate_f_cost =
+          candidate_g_cost +
+          lambda_heu_ * getHeuristicCost(endpoint_position, endpoint_velocity, end_pt, end_vel, candidate_time);
+
+      PrimitiveCandidate candidate{ endpoint_position, endpoint_velocity, ut, endpoint_index, candidate_g_cost,
+                                    candidate_f_cost };
+      auto candidate_iter = candidate_indices.find(endpoint_index);
+      if (candidate_iter == candidate_indices.end())
+      {
+        candidate_indices.emplace(endpoint_index, candidates.size());
+        candidates.push_back(candidate);
+      }
+      else if (candidate_f_cost < candidates[candidate_iter->second].f_cost)
+      {
+        candidates[candidate_iter->second] = candidate;
+      }
+    }
 
     for (const PrimitiveCandidate& candidate : candidates)
     {
@@ -769,25 +794,11 @@ void KinoAstar::sampleEllipsoid(std::vector<KinoAstarNodePtr> path_pool, std::ve
   }
 }
 
-void KinoAstar::StateTransit(Eigen::Matrix<double, 6, 1>& x0, Eigen::Matrix<double, 6, 1>& xt, Eigen::Vector3d ut,
-                             double t)
+void KinoAstar::StateTransit(const Eigen::Matrix<double, 6, 1>& x0, Eigen::Matrix<double, 6, 1>& xt,
+                             const Eigen::Vector3d& ut, double t)
 {
-  Eigen::Matrix<double, 6, 6> e_At = Eigen::Matrix<double, 6, 6>::Identity();
-  for (int i = 0; i < 3; i++)
-  {
-    e_At(i, 3 + i) = t;
-  }
-  // bug fixed: Integral should set zero
-  Eigen::Matrix<double, 6, 3> Integral = Eigen::Matrix<double, 6, 3>::Zero();
-  for (int i = 0; i < 6; i++)
-  {
-    if (i < 3)
-      Integral(i, i) = 0.5 * t * t;
-    else
-      Integral(i, i - 3) = t;
-  }
-
-  xt = e_At * x0 + Integral * ut;
+  xt.head(3) = x0.head(3) + x0.tail(3) * t + 0.5 * ut * t * t;
+  xt.tail(3) = x0.tail(3) + ut * t;
 }
 
 void KinoAstar::visPathNodes(std::vector<Eigen::Vector3d>& path_nodes_list)
