@@ -20,11 +20,10 @@ typedef pcl::PointXYZ PCLPoint;
 typedef pcl::PointCloud<PCLPoint> PCLPointCloud;
 typedef pcl::KdTreeFLANN<PCLPoint> KdTree; 
 
-#define IN_OPEN_LIST_ 'a';
-#define IN_CLOSE_LIST_ 'b';
-#define NOT_EXPANDED_ 'c';
-
 constexpr double KINO_ASTAR_INF = std::numeric_limits<double>::infinity();
+constexpr char IN_OPEN_LIST_ = 'a';
+constexpr char IN_CLOSE_LIST_ = 'b';
+constexpr char NOT_EXPANDED_ = 'c';
 
 class KinoAstarNode
 {
@@ -86,7 +85,7 @@ private:
 public:
   void insert(Eigen::Vector3i index, KinoAstarNodePtr node)
   {
-    data_table_.insert(std::make_pair(index, node));
+    data_table_[index] = node;
   }
 
   KinoAstarNodePtr find(Eigen::Vector3i index)
@@ -180,7 +179,7 @@ private:
   std::vector<double> cubic(double a, double b, double c, double d);
   std::vector<double> quartic(double a, double b, double c, double d, double e);
   bool computeShotTraj(Eigen::Vector3d x1, Eigen::Vector3d v1, Eigen::Vector3d x2, Eigen::Vector3d v2,
-                       double optimal_time);
+                       double& shot_time);
   std::vector<KinoAstarNodePtr> retrievePath(KinoAstarNodePtr end_node, std::vector<Eigen::Vector3d>& path_nodes_list);
   void samplePath(std::vector<KinoAstarNodePtr> path_pool, std::vector<Eigen::Vector3d>& path);
   void sampleEllipsoid(std::vector<KinoAstarNodePtr> path_pool, std::vector<Eigen::Vector3d>& path,

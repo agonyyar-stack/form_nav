@@ -122,6 +122,10 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
   {
     KinoAstarNodePtr current_node = open_list_.top();
     open_list_.pop();
+
+    if (current_node->node_state != IN_OPEN_LIST_ || expanded_list_.find(current_node->index) != current_node)
+      continue;
+
     close_list_.insert(current_node->index, current_node);
     current_node->node_state = IN_CLOSE_LIST_;
     current_node->duration = sample_tau_;
@@ -131,17 +135,25 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
     // check if near goal
     if ((current_node->position - end_pt).norm() < goal_tolerance_)
     {
-      double tmp_cost = lambda_heu_ *
-                        getHeuristicCost(current_node->position, current_node->velocity, end_pt, end_vel, optimal_time);
+      getHeuristicCost(current_node->position, current_node->velocity, end_pt, end_vel, optimal_time);
       bool shot_path_found =
           computeShotTraj(current_node->position, current_node->velocity, end_pt, end_vel, optimal_time);
       // std::cout << "optimal_time: " << optimal_time << std::endl;
       if (shot_path_found)
       {
         ros::Time end_time = ros::Time::now();
+        double shot_cost = rou_ * optimal_time;
+        for (int dimension = 0; dimension < 3; dimension++)
+        {
+          double quadratic_coef = shot_coef_(dimension, 2);
+          double cubic_coef = shot_coef_(dimension, 3);
+          shot_cost += 4.0 * quadratic_coef * quadratic_coef * optimal_time +
+                       12.0 * quadratic_coef * cubic_coef * optimal_time * optimal_time +
+                       12.0 * cubic_coef * cubic_coef * optimal_time * optimal_time * optimal_time;
+        }
         std::cout << "kinodynamic path found, time cost: " << (end_time - start_time).toSec() << std::endl;
         std::cout << "use_node_num: " << use_node_num_ << std::endl;
-        std::cout << "total_cost_J: " << current_node->g_cost + tmp_cost << std::endl;
+        std::cout << "total_cost_J: " << current_node->g_cost + shot_cost << std::endl;
         current_node->duration = optimal_time;
         std::vector<KinoAstarNodePtr> path_pool = retrievePath(current_node, path_nodes_list);
         switch (collision_check_type_)
@@ -173,123 +185,126 @@ int KinoAstar::search(Eigen::Vector3d start_pt, Eigen::Vector3d start_vel, Eigen
       // else continue;
     }
 
-    // expand current node
-    // (2r+1)^3 sample
+    struct PrimitiveCandidate
+    {
+      Eigen::Vector3d position;
+      Eigen::Vector3d velocity;
+      Eigen::Vector3d input;
+      Eigen::Vector3i index;
+      double g_cost;
+      double f_cost;
+    };
+
+    std::vector<PrimitiveCandidate> candidates;
+    std::unordered_map<Eigen::Vector3i, size_t, vector3i_hash<Eigen::Vector3i>> candidate_indices;
+    Eigen::Matrix<double, 6, 1> x0;
+    x0.head(3) = current_node->position;
+    x0.tail(3) = current_node->velocity;
+
+    // expand current node and keep only the minimum-f primitive from this parent in each voxel
     for (double ax = -max_accel_; ax <= max_accel_ + 1e-3; ax += inv_acc_res_ * max_accel_)
       for (double ay = -max_accel_; ay <= max_accel_ + 1e-3; ay += inv_acc_res_ * max_accel_)
         for (double az = -max_accel_; az <= max_accel_ + 1e-3; az += inv_acc_res_ * max_accel_)
         {
           Eigen::Vector3d ut;
           ut << ax, ay, az;
-          Eigen::Matrix<double, 6, 1> x0;
-          x0.head(3) = current_node->position;
-          x0.tail(3) = current_node->velocity;
-          Eigen::Matrix<double, 6, 1> xt;
+          Eigen::Matrix<double, 6, 1> endpoint_state;
+          StateTransit(x0, endpoint_state, ut, sample_tau_);
+
+          Eigen::Vector3d endpoint_velocity = endpoint_state.tail(3);
+          if ((endpoint_velocity.array().abs() > max_vel_).any())
+            continue;
+
+          Eigen::Vector3d endpoint_position = endpoint_state.head(3);
+          Eigen::Vector3i endpoint_index = posToIndex(endpoint_position);
+          if (endpoint_index == current_node->index || close_list_.find(endpoint_index) != NULL)
+            continue;
 
           int segment_num = std::max(1, static_cast<int>(std::ceil(sample_tau_ / step_size_)));
-          bool flag = false;
-          bool collision_flag = false;
-          for (int i = 0; i <= segment_num; i++)
+          bool primitive_invalid = false;
+          for (int i = 1; i <= segment_num; i++)
           {
             double t = sample_tau_ * static_cast<double>(i) / static_cast<double>(segment_num);
+            Eigen::Matrix<double, 6, 1> xt;
             StateTransit(x0, xt, ut, t);
             Eigen::Vector3d tmp_pos = xt.head(3);
-            // check collision and if out of map
-            if (grid_map_->isInMap(tmp_pos) == false)
+            if (!grid_map_->isInMap(tmp_pos))
             {
-              flag = true;
+              primitive_invalid = true;
               break;
             }
-            // check collision
+
             switch (collision_check_type_)
             {
               case 1:  // grid map check
                 if (grid_map_->getInflateOccupancy(tmp_pos) == 1)
-                {
-                  collision_flag = true;
-                  break;
-                }
-                break;  // prevent fallthrough to case 2
+                  primitive_invalid = true;
+                break;
 
               case 2:  // local cloud check
-                if (isCollisionFree(tmp_pos, ut) == false)
-                {
-                  collision_flag = true;
-                  break;
-                }
-                break;  // prevent fallthrough
+                if (!isCollisionFree(tmp_pos, ut))
+                  primitive_invalid = true;
+                break;
 
               default:
+                primitive_invalid = true;
                 break;
             }
-            if (collision_flag)
-            {
-              flag = true;
+            if (primitive_invalid)
               break;
-            }
-            // check velocity limit
-            if (xt.tail(3)(0) < -max_vel_ || xt.tail(3)(0) > max_vel_ || xt.tail(3)(1) < -max_vel_ ||
-                xt.tail(3)(1) > max_vel_ || xt.tail(3)(2) < -max_vel_ || xt.tail(3)(2) > max_vel_)
-            {
-              flag = true;
-              break;
-            }
           }
-          if (flag)
+          if (primitive_invalid)
             continue;
 
-          StateTransit(x0, xt, ut, sample_tau_);
-          // std::cout << "xt: " << xt.head(3).transpose() << std::endl;
-          // std::cout << "index: " << posToIndex(xt.head(3)).transpose() << std::endl;
-          // check if in close_list_
-          if (close_list_.find(posToIndex(xt.head(3))) != NULL)
-          {
-            continue;
-          }
-          // check if in expanded_list_
-          else if (expanded_list_.find(posToIndex(xt.head(3))) == NULL)
-          {
-            KinoAstarNodePtr pro_node = path_node_pool_[use_node_num_];
-            pro_node->position = xt.head(3);
-            pro_node->velocity = xt.tail(3);
-            pro_node->index = posToIndex(xt.head(3));
-            pro_node->g_cost = current_node->g_cost + (ut.dot(ut) + rou_) * sample_tau_;
-            pro_node->f_cost = pro_node->g_cost + lambda_heu_ * getHeuristicCost(pro_node->position, pro_node->velocity,
-                                                                                 end_pt, end_vel, optimal_time);
-            pro_node->parent = current_node;
-            pro_node->input = ut;
-            pro_node->duration = sample_tau_;
-            pro_node->node_state = IN_OPEN_LIST_;
-            use_node_num_++;
-            open_list_.push(pro_node);
-            expanded_list_.insert(pro_node->index, pro_node);
+          double candidate_time = 0.0;
+          double candidate_g_cost = current_node->g_cost + (ut.squaredNorm() + rou_) * sample_tau_;
+          double candidate_f_cost =
+              candidate_g_cost +
+              lambda_heu_ * getHeuristicCost(endpoint_position, endpoint_velocity, end_pt, end_vel, candidate_time);
 
-            // check if use_node_num reach the max_node_num
-            if (use_node_num_ >= allocated_node_num_)
-            {
-              std::cout << "reach max node num, end searching" << std::endl;
-              return NO_PATH_FOUND;
-            }
-          }
-          else
+          PrimitiveCandidate candidate{ endpoint_position, endpoint_velocity, ut, endpoint_index, candidate_g_cost,
+                                        candidate_f_cost };
+          auto candidate_iter = candidate_indices.find(endpoint_index);
+          if (candidate_iter == candidate_indices.end())
           {
-            // pruning, if in same grid, check if g_cost is smaller and update
-            double tmp_g_cost = current_node->g_cost + (ut.dot(ut) + rou_) * sample_tau_;
-            KinoAstarNodePtr old_node = expanded_list_.find(posToIndex(xt.head(3)));
-            if (tmp_g_cost < old_node->g_cost)
-            {
-              old_node->position = xt.head(3);
-              old_node->velocity = xt.tail(3);
-              // old_node->index = posToIndex(xt.head(3));
-              old_node->g_cost = tmp_g_cost;
-              old_node->f_cost =
-                  old_node->g_cost +
-                  lambda_heu_ * getHeuristicCost(old_node->position, old_node->velocity, end_pt, end_vel, optimal_time);
-              old_node->parent = current_node;
-              old_node->input = ut;
-            }
+            candidate_indices.emplace(endpoint_index, candidates.size());
+            candidates.push_back(candidate);
+          }
+          else if (candidate_f_cost < candidates[candidate_iter->second].f_cost)
+          {
+            candidates[candidate_iter->second] = candidate;
           }
         }
+
+    for (const PrimitiveCandidate& candidate : candidates)
+    {
+      KinoAstarNodePtr old_node = expanded_list_.find(candidate.index);
+      if (old_node != NULL && (old_node->node_state == IN_CLOSE_LIST_ || candidate.g_cost >= old_node->g_cost))
+        continue;
+
+      if (use_node_num_ >= allocated_node_num_)
+      {
+        std::cout << "reach max node num, end searching" << std::endl;
+        return NO_PATH_FOUND;
+      }
+
+      KinoAstarNodePtr proposed_node = path_node_pool_[use_node_num_++];
+      proposed_node->position = candidate.position;
+      proposed_node->velocity = candidate.velocity;
+      proposed_node->index = candidate.index;
+      proposed_node->g_cost = candidate.g_cost;
+      proposed_node->f_cost = candidate.f_cost;
+      proposed_node->parent = current_node;
+      proposed_node->input = candidate.input;
+      proposed_node->duration = sample_tau_;
+      proposed_node->node_state = IN_OPEN_LIST_;
+
+      if (old_node != NULL)
+        old_node->node_state = NOT_EXPANDED_;
+
+      expanded_list_.insert(proposed_node->index, proposed_node);
+      open_list_.push(proposed_node);
+    }
   }
 
   std::cout << "open_list is empty, end searching, no path found" << std::endl;
@@ -479,60 +494,91 @@ std::vector<double> KinoAstar::quartic(double a, double b, double c, double d, d
 }
 
 bool KinoAstar::computeShotTraj(Eigen::Vector3d x1, Eigen::Vector3d v1, Eigen::Vector3d x2, Eigen::Vector3d v2,
-                                double optimal_time)
+                                double& shot_time)
 {
-  double td = optimal_time;
-  Eigen::Vector3d dp = x2 - x1;
-  Eigen::Vector3d dv = v2 - v1;
-  shot_coef_.col(0) = x1;
-  shot_coef_.col(1) = v1;
-  shot_coef_.col(2) = 0.5 * (6 / (td * td) * (dp - v1 * td) - 2 * dv / td);
-  shot_coef_.col(3) = 1.0 / 6.0 * (-12 / (td * td * td) * (dp - v1 * td) + 6 * dv / (td * td));
+  constexpr int kMaxTimeScaleAttempts = 8;
+  constexpr double kTimeScaleFactor = 1.25;
+  constexpr double kConstraintTolerance = 1e-6;
+
+  if (!std::isfinite(shot_time) || shot_time <= 0.0 ||
+      (v1.array().abs() > max_vel_ + kConstraintTolerance).any() ||
+      (v2.array().abs() > max_vel_ + kConstraintTolerance).any())
+  {
+    return false;
+  }
 
   Eigen::Matrix<double, 4, 4> Transit_v;
   Transit_v << 0, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0;
   Eigen::Matrix<double, 4, 4> Transit_a;
   Transit_a << 0, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0;
-  vel_coef_ = shot_coef_ * Transit_v;
-  acc_coef_ = vel_coef_ * Transit_a;
 
-  Eigen::Matrix<double, 4, 1> t_vector;
-
-  int segment_num = std::max(1, static_cast<int>(std::ceil(td / step_size_)));
-  double curr_t = 0.0;
-  for (int j = 0; j <= segment_num; j++)
+  Eigen::Vector3d dp = x2 - x1;
+  Eigen::Vector3d dv = v2 - v1;
+  double candidate_time = shot_time;
+  for (int attempt = 0; attempt < kMaxTimeScaleAttempts; attempt++)
   {
-    curr_t = td * static_cast<double>(j) / static_cast<double>(segment_num);
-    for (int i = 0; i < 4; i++)
+    Eigen::Matrix<double, 3, 4> candidate_coef;
+    candidate_coef.col(0) = x1;
+    candidate_coef.col(1) = v1;
+    candidate_coef.col(2) =
+        0.5 * (6.0 / (candidate_time * candidate_time) * (dp - v1 * candidate_time) - 2.0 * dv / candidate_time);
+    candidate_coef.col(3) =
+        1.0 / 6.0 * (-12.0 / (candidate_time * candidate_time * candidate_time) *
+                         (dp - v1 * candidate_time) +
+                     6.0 * dv / (candidate_time * candidate_time));
+    Eigen::Matrix<double, 3, 4> candidate_vel_coef = candidate_coef * Transit_v;
+    Eigen::Matrix<double, 3, 4> candidate_acc_coef = candidate_vel_coef * Transit_a;
+
+    int segment_num = std::max(1, static_cast<int>(std::ceil(candidate_time / step_size_)));
+    bool dynamics_feasible = true;
+    Eigen::Matrix<double, 4, 1> t_vector;
+    for (int sample = 0; sample <= segment_num; sample++)
     {
-      t_vector(i) = pow(curr_t, i);
+      double current_time = candidate_time * static_cast<double>(sample) / static_cast<double>(segment_num);
+      for (int power = 0; power < 4; power++)
+        t_vector(power) = pow(current_time, power);
+
+      Eigen::Vector3d shot_vel = candidate_vel_coef * t_vector;
+      Eigen::Vector3d shot_acc = candidate_acc_coef * t_vector;
+      if ((shot_vel.array().abs() > max_vel_ + kConstraintTolerance).any() ||
+          (shot_acc.array().abs() > max_accel_ + kConstraintTolerance).any())
+      {
+        dynamics_feasible = false;
+        break;
+      }
     }
 
-    Eigen::Vector3d shot_pos = shot_coef_ * t_vector;
-    Eigen::Vector3d shot_vel = vel_coef_ * t_vector;
-    Eigen::Vector3d shot_acc = acc_coef_ * t_vector;
-    // check collision
-    if (grid_map_->getInflateOccupancy(shot_pos))
+    if (!dynamics_feasible)
     {
-      return false;
+      candidate_time *= kTimeScaleFactor;
+      continue;
     }
-    // only check collision, vel and acc limit by limit T_
-    // // check velocity limit
-    // if (shot_vel(0) > max_vel_ || shot_vel(0) < -max_vel_ ||
-    //     shot_vel(1) > max_vel_ || shot_vel(1) < -max_vel_ ||
-    //     shot_vel(2) > max_vel_ || shot_vel(2) < -max_vel_)
-    // {
-    //   return false;
-    // }
-    // // check acceleration limit
-    // if (shot_acc(0) > max_accel_ || shot_acc(0) < -max_accel_ ||
-    //     shot_acc(1) > max_accel_ || shot_acc(1) < -max_accel_ ||
-    //     shot_acc(2) > max_accel_ || shot_acc(2) < -max_accel_)
-    // {
-    //   return false;
-    // }
+
+    for (int sample = 0; sample <= segment_num; sample++)
+    {
+      double current_time = candidate_time * static_cast<double>(sample) / static_cast<double>(segment_num);
+      for (int power = 0; power < 4; power++)
+        t_vector(power) = pow(current_time, power);
+
+      Eigen::Vector3d shot_pos = candidate_coef * t_vector;
+      Eigen::Vector3d shot_acc = candidate_acc_coef * t_vector;
+      if (!grid_map_->isInMap(shot_pos))
+        return false;
+
+      if (collision_check_type_ == 1 && grid_map_->getInflateOccupancy(shot_pos) == 1)
+        return false;
+      if (collision_check_type_ == 2 && !isCollisionFree(shot_pos, shot_acc))
+        return false;
+    }
+
+    shot_coef_ = candidate_coef;
+    vel_coef_ = candidate_vel_coef;
+    acc_coef_ = candidate_acc_coef;
+    shot_time = candidate_time;
+    return true;
   }
-  return true;
+
+  return false;
 }
 
 std::vector<KinoAstarNodePtr> KinoAstar::retrievePath(KinoAstarNodePtr end_node,
