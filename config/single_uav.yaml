@@ -1,0 +1,7 @@
+offsets:
+  uav0: [0.0, 0.0, 0.0, 0.0]
+
+agents:
+  uav0:
+    neighbors: []
+    leader_access: true

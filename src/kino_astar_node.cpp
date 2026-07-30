@@ -1,11 +1,11 @@
 #include <ros/ros.h>
 #include <nav_msgs/Path.h>
-#include <std_msgs/Float64MultiArray.h>
 #include <visualization_msgs/Marker.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/transform_listener.h>
 #include <form_nav/grid_map.h>
 #include <form_nav/kino_astar.h>
+#include <form_nav/GlobalTrajectory.h>
 
 path_searching::KinoAstar::Ptr kino_astar_;
 
@@ -13,7 +13,7 @@ ros::Subscriber goal_sub;
 ros::Subscriber odom_sub;
 
 ros::Publisher path_marker_pub;
-ros::Publisher path_traj_pub;  // Float64MultiArray: 带速度的轨迹
+ros::Publisher path_traj_pub;
 ros::Publisher goal_marker_pub;
 
 nav_msgs::Odometry::ConstPtr odom_;
@@ -22,6 +22,7 @@ std::string world_frame = "world";
 Eigen::Vector3d planning_uav_formation_offset = Eigen::Vector3d::Zero();
 std::unique_ptr<tf2_ros::Buffer> tf_buffer;
 std::unique_ptr<tf2_ros::TransformListener> tf_listener;
+uint32_t next_trajectory_id = 1;
 
 void OdomCallback(const nav_msgs::Odometry::ConstPtr& odom)
 { 
@@ -114,28 +115,38 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
       path_marker_pub.publish(path_marker);
     }
 
-    // --- Float64MultiArray 轨迹: 每点 7 double [t,x,y,z,vx,vy,vz] ---
+    // --- 带编号的全局轨迹: 每点 [t,x,y,z,vx,vy,vz] ---
     {
       const auto& velocities = kino_astar_->getPathVelocities();
       const auto& times = kino_astar_->getPathTimes();
-      std_msgs::Float64MultiArray traj_msg;
-      traj_msg.layout.dim.resize(1);
-      traj_msg.layout.dim[0].label = "waypoints";
-      traj_msg.layout.dim[0].size = path.size();
-      traj_msg.layout.dim[0].stride = 7;
       size_t n = std::min({path.size(), velocities.size(), times.size()});
-      traj_msg.data.reserve(n * 7);
+      if (n == 0)
+      {
+        ROS_WARN("Kinodynamic A* returned an empty sampled trajectory");
+        path.clear();
+        kino_astar_->reset();
+        return;
+      }
+      form_nav::GlobalTrajectory traj_msg;
+      traj_msg.header.stamp = ros::Time::now();
+      traj_msg.header.frame_id = world_frame;
+      traj_msg.trajectory_id = next_trajectory_id++;
+      if (next_trajectory_id == 0) next_trajectory_id = 1;
+      traj_msg.steps = n;
+      traj_msg.waypoints.reserve(n * 7);
       for (size_t i = 0; i < n; i++)
       {
-        traj_msg.data.push_back(times[i]);
-        traj_msg.data.push_back(path[i][0]);
-        traj_msg.data.push_back(path[i][1]);
-        traj_msg.data.push_back(path[i][2]);
-        traj_msg.data.push_back(velocities[i][0]);
-        traj_msg.data.push_back(velocities[i][1]);
-        traj_msg.data.push_back(velocities[i][2]);
+        traj_msg.waypoints.push_back(times[i]);
+        traj_msg.waypoints.push_back(path[i][0]);
+        traj_msg.waypoints.push_back(path[i][1]);
+        traj_msg.waypoints.push_back(path[i][2]);
+        traj_msg.waypoints.push_back(velocities[i][0]);
+        traj_msg.waypoints.push_back(velocities[i][1]);
+        traj_msg.waypoints.push_back(velocities[i][2]);
       }
       path_traj_pub.publish(traj_msg);
+      ROS_INFO("Published global trajectory %u with %zu waypoints",
+               traj_msg.trajectory_id, n);
     }
   }
   else
@@ -169,7 +180,9 @@ int main(int argc, char** argv)
   odom_sub = nh.subscribe<nav_msgs::Odometry>("/kino_astar/odom", 10, &OdomCallback);
 
   path_marker_pub = nh.advertise<visualization_msgs::Marker>("/kino_astar/path_marker", 10);
-  path_traj_pub = nh.advertise<std_msgs::Float64MultiArray>("/kino_astar/trajectory", 10);
+  // Latching guarantees that MPC nodes started later receive the active path.
+  path_traj_pub = nh.advertise<form_nav::GlobalTrajectory>(
+      "/kino_astar/trajectory", 1, true);
   goal_marker_pub = nh.advertise<visualization_msgs::Marker>("/kino_astar/goal_marker", 10);
 
   GridMap::Ptr grid_map = std::make_shared<GridMap>();

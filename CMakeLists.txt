@@ -29,6 +29,8 @@ find_package(casadi REQUIRED)
 
 add_message_files(
   FILES
+  GlobalPathProgress.msg
+  GlobalTrajectory.msg
   PredictedTrajectory.msg
 )
 
@@ -92,6 +94,7 @@ target_link_libraries(dwa_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIB
 
 add_executable(kino_astar_node src/kino_astar_node.cpp src/kino_astar.cpp src/grid_map.cpp src/raycast.cpp)
 target_link_libraries(kino_astar_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES})
+add_dependencies(kino_astar_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 # 仅发布 nav_msgs::Path 路径位置信息
 add_executable(kino_astar_path_node src/kino_astar_path_node.cpp src/kino_astar.cpp src/grid_map.cpp src/raycast.cpp)

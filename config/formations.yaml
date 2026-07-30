@@ -1,6 +1,5 @@
 offsets:
-  # uav0: [-2.0,  0.0, 0.0, 0.0]
-  uav0: [0.0,  0.0, 0.0, 0.0]
+  uav0: [-2.0,  0.0, 0.0, 0.0]
   uav1: [-2.0,  2.0, 0.0, 0.0]
   uav2: [-2.0, -2.0, 0.0, 0.0]
   uav3: [ 2.0,  2.0, 0.0, 0.0]
@@ -9,10 +8,8 @@ offsets:
 
 agents:
   uav0:
-    # neighbors: [3, 4]
-    neighbors: []
-    # leader_access: false
-    leader_access: true
+    neighbors: [3, 4]
+    leader_access: false
   uav1:
     neighbors: [5]
     leader_access: false
