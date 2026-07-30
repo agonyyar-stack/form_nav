@@ -9,6 +9,10 @@ Panels:
         - /UAV01/Recorded_Path1
         - /UAV01/MPC1
         - /UAV01/MPC1/mpc_trajectory1
+        - /UAV11/Pose1
+        - /UAV21/Pose1
+        - /UAV31/Pose1
+        - /UAV41/Pose1
       Splitter Ratio: 0.5024154782295227
     Tree Height: 1492
   - Class: rviz/Selection
@@ -232,6 +236,431 @@ Visualization Manager:
           Name: MPC
       Enabled: true
       Name: UAV0
+    - Class: rviz/Group
+      Displays:
+        - Alpha: 1
+          Axes Length: 0.30000001192092896
+          Axes Radius: 0.07999999821186066
+          Class: rviz/Pose
+          Color: 255; 25; 0
+          Enabled: true
+          Head Length: 0.30000001192092896
+          Head Radius: 0.10000000149011612
+          Name: Pose
+          Queue Size: 10
+          Shaft Length: 1
+          Shaft Radius: 0.05000000074505806
+          Shape: Axes
+          Topic: /uav1/mavros/local_position/pose
+          Unreliable: false
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 78; 154; 6
+          Enabled: true
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
+          Line Style: Billboards
+          Line Width: 0.05000000074505806
+          Name: Recorded_Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
+          Topic: /uav0/traveled_path
+          Unreliable: false
+          Value: true
+        - Class: rviz/Group
+          Displays:
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Autocompute Value Bounds:
+                Max Value: 10
+                Min Value: -10
+                Value: true
+              Axis: Z
+              Channel Name: intensity
+              Class: rviz/PointCloud2
+              Color: 223; 178; 13
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: false
+              Invert Rainbow: false
+              Max Color: 255; 255; 255
+              Min Color: 0; 0; 0
+              Name: local_ESDF
+              Position Transformer: XYZ
+              Queue Size: 10
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.10000000149011612
+              Style: Boxes
+              Topic: /sdf_map/occupancy_inflate
+              Unreliable: false
+              Use Fixed Frame: true
+              Use rainbow: true
+              Value: false
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav0/mpc_predicted_path_marker
+              Name: mpc_trajectory
+              Namespaces:
+                mpc_predict_points: true
+                mpc_predicted_path: true
+              Queue Size: 100
+              Value: true
+          Enabled: true
+          Name: MPC
+      Enabled: true
+      Name: UAV1
+    - Class: rviz/Group
+      Displays:
+        - Alpha: 1
+          Axes Length: 0.30000001192092896
+          Axes Radius: 0.07999999821186066
+          Class: rviz/Pose
+          Color: 255; 25; 0
+          Enabled: true
+          Head Length: 0.30000001192092896
+          Head Radius: 0.10000000149011612
+          Name: Pose
+          Queue Size: 10
+          Shaft Length: 1
+          Shaft Radius: 0.05000000074505806
+          Shape: Axes
+          Topic: /uav2/mavros/local_position/pose
+          Unreliable: false
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 78; 154; 6
+          Enabled: true
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
+          Line Style: Billboards
+          Line Width: 0.05000000074505806
+          Name: Recorded_Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
+          Topic: /uav0/traveled_path
+          Unreliable: false
+          Value: true
+        - Class: rviz/Group
+          Displays:
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Autocompute Value Bounds:
+                Max Value: 10
+                Min Value: -10
+                Value: true
+              Axis: Z
+              Channel Name: intensity
+              Class: rviz/PointCloud2
+              Color: 223; 178; 13
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: false
+              Invert Rainbow: false
+              Max Color: 255; 255; 255
+              Min Color: 0; 0; 0
+              Name: local_ESDF
+              Position Transformer: XYZ
+              Queue Size: 10
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.10000000149011612
+              Style: Boxes
+              Topic: /sdf_map/occupancy_inflate
+              Unreliable: false
+              Use Fixed Frame: true
+              Use rainbow: true
+              Value: false
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav0/mpc_predicted_path_marker
+              Name: mpc_trajectory
+              Namespaces:
+                mpc_predict_points: true
+                mpc_predicted_path: true
+              Queue Size: 100
+              Value: true
+          Enabled: true
+          Name: MPC
+      Enabled: true
+      Name: UAV2
+    - Class: rviz/Group
+      Displays:
+        - Alpha: 1
+          Axes Length: 0.30000001192092896
+          Axes Radius: 0.07999999821186066
+          Class: rviz/Pose
+          Color: 255; 25; 0
+          Enabled: true
+          Head Length: 0.30000001192092896
+          Head Radius: 0.10000000149011612
+          Name: Pose
+          Queue Size: 10
+          Shaft Length: 1
+          Shaft Radius: 0.05000000074505806
+          Shape: Axes
+          Topic: /uav3/mavros/local_position/pose
+          Unreliable: false
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 78; 154; 6
+          Enabled: true
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
+          Line Style: Billboards
+          Line Width: 0.05000000074505806
+          Name: Recorded_Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
+          Topic: /uav0/traveled_path
+          Unreliable: false
+          Value: true
+        - Class: rviz/Group
+          Displays:
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Autocompute Value Bounds:
+                Max Value: 10
+                Min Value: -10
+                Value: true
+              Axis: Z
+              Channel Name: intensity
+              Class: rviz/PointCloud2
+              Color: 223; 178; 13
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: false
+              Invert Rainbow: false
+              Max Color: 255; 255; 255
+              Min Color: 0; 0; 0
+              Name: local_ESDF
+              Position Transformer: XYZ
+              Queue Size: 10
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.10000000149011612
+              Style: Boxes
+              Topic: /sdf_map/occupancy_inflate
+              Unreliable: false
+              Use Fixed Frame: true
+              Use rainbow: true
+              Value: false
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav0/mpc_predicted_path_marker
+              Name: mpc_trajectory
+              Namespaces:
+                mpc_predict_points: true
+                mpc_predicted_path: true
+              Queue Size: 100
+              Value: true
+          Enabled: true
+          Name: MPC
+      Enabled: true
+      Name: UAV3
+    - Class: rviz/Group
+      Displays:
+        - Alpha: 1
+          Axes Length: 0.30000001192092896
+          Axes Radius: 0.07999999821186066
+          Class: rviz/Pose
+          Color: 255; 25; 0
+          Enabled: true
+          Head Length: 0.30000001192092896
+          Head Radius: 0.10000000149011612
+          Name: Pose
+          Queue Size: 10
+          Shaft Length: 1
+          Shaft Radius: 0.05000000074505806
+          Shape: Axes
+          Topic: /uav4/mavros/local_position/pose
+          Unreliable: false
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 78; 154; 6
+          Enabled: true
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
+          Line Style: Billboards
+          Line Width: 0.05000000074505806
+          Name: Recorded_Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
+          Topic: /uav0/traveled_path
+          Unreliable: false
+          Value: true
+        - Class: rviz/Group
+          Displays:
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Autocompute Value Bounds:
+                Max Value: 10
+                Min Value: -10
+                Value: true
+              Axis: Z
+              Channel Name: intensity
+              Class: rviz/PointCloud2
+              Color: 223; 178; 13
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: false
+              Invert Rainbow: false
+              Max Color: 255; 255; 255
+              Min Color: 0; 0; 0
+              Name: local_ESDF
+              Position Transformer: XYZ
+              Queue Size: 10
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.10000000149011612
+              Style: Boxes
+              Topic: /sdf_map/occupancy_inflate
+              Unreliable: false
+              Use Fixed Frame: true
+              Use rainbow: true
+              Value: false
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav0/mpc_predicted_path_marker
+              Name: mpc_trajectory
+              Namespaces:
+                mpc_predict_points: true
+                mpc_predicted_path: true
+              Queue Size: 100
+              Value: true
+          Enabled: true
+          Name: MPC
+      Enabled: true
+      Name: UAV4
+    - Class: rviz/Group
+      Displays:
+        - Alpha: 1
+          Axes Length: 0.30000001192092896
+          Axes Radius: 0.07999999821186066
+          Class: rviz/Pose
+          Color: 255; 25; 0
+          Enabled: true
+          Head Length: 0.30000001192092896
+          Head Radius: 0.10000000149011612
+          Name: Pose
+          Queue Size: 10
+          Shaft Length: 1
+          Shaft Radius: 0.05000000074505806
+          Shape: Axes
+          Topic: /uav5/mavros/local_position/pose
+          Unreliable: false
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 78; 154; 6
+          Enabled: true
+          Head Diameter: 0.30000001192092896
+          Head Length: 0.20000000298023224
+          Length: 0.30000001192092896
+          Line Style: Billboards
+          Line Width: 0.05000000074505806
+          Name: Recorded_Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.10000000149011612
+          Shaft Length: 0.10000000149011612
+          Topic: /uav0/traveled_path
+          Unreliable: false
+          Value: true
+        - Class: rviz/Group
+          Displays:
+            - Alpha: 1
+              Autocompute Intensity Bounds: true
+              Autocompute Value Bounds:
+                Max Value: 10
+                Min Value: -10
+                Value: true
+              Axis: Z
+              Channel Name: intensity
+              Class: rviz/PointCloud2
+              Color: 223; 178; 13
+              Color Transformer: FlatColor
+              Decay Time: 0
+              Enabled: false
+              Invert Rainbow: false
+              Max Color: 255; 255; 255
+              Min Color: 0; 0; 0
+              Name: local_ESDF
+              Position Transformer: XYZ
+              Queue Size: 10
+              Selectable: true
+              Size (Pixels): 3
+              Size (m): 0.10000000149011612
+              Style: Boxes
+              Topic: /sdf_map/occupancy_inflate
+              Unreliable: false
+              Use Fixed Frame: true
+              Use rainbow: true
+              Value: false
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav0/mpc_predicted_path_marker
+              Name: mpc_trajectory
+              Namespaces:
+                mpc_predict_points: true
+                mpc_predicted_path: true
+              Queue Size: 100
+              Value: true
+          Enabled: true
+          Name: MPC
+      Enabled: true
+      Name: UAV5
   Enabled: true
   Global Options:
     Background Color: 255; 255; 255
@@ -260,7 +689,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 63.48075866699219
+      Distance: 46.86591339111328
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -268,17 +697,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -0.8277456164360046
-        Y: 0.22577375173568726
-        Z: -8.992837905883789
+        X: -12.828792572021484
+        Y: 0.9785029888153076
+        Z: -8.719953536987305
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.4097964763641357
+      Pitch: 1.5147967338562012
       Target Frame: <Fixed Frame>
-      Yaw: 4.683565139770508
+      Yaw: 4.743566036224365
     Saved: ~
 Window Geometry:
   Displays:

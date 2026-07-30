@@ -11,7 +11,10 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/transform_listener.h>
 #include <Eigen/Dense>
+#include <algorithm>
 #include <cmath>
+#include <sstream>
+#include <stdexcept>
 #include "form_nav/mpc.h"
 #include "form_nav/formation_config.h"
 #include "form_nav/esdf_casadi.h"
@@ -25,6 +28,8 @@ std::string LOCAL_FRAME;
 int MY_ID = 0;
 int MPC_HORIZON = 10;
 double MPC_DT = 0.05;
+double NEIGHBOR_TRAJECTORY_TIMEOUT = 0.3;
+double NEIGHBOR_FUTURE_TOLERANCE = 0.05;
 const double LOOP_RATE = 20.0;
 
 std::unique_ptr<tf2_ros::Buffer> tf_buffer_ptr;
@@ -56,7 +61,15 @@ nav_msgs::Path traveled_path;  // 累积已走过的位置
 
 // --- 邻居 + MPC ---
 std::unique_ptr<Mpc> mpc_ptr;
-std::map<int, UavState> neighbors_map;
+std::vector<int> required_neighbor_ids;
+
+struct NeighborTrajectoryCache {
+    Eigen::MatrixXd predicted_states;
+    ros::Time prediction_start;
+    double dt = 0.0;
+};
+
+std::map<int, NeighborTrajectoryCache> neighbor_trajectories;
 
 // --- ESDF 地图 + CasADi 插值器 ---
 std::unique_ptr<SDFMap> sdf_map_ptr;
@@ -195,8 +208,11 @@ void velocityCallbackWorld(const geometry_msgs::TwistStamped::ConstPtr& msg) {
 
 void neighborTrajectoryCallback(const form_nav::PredictedTrajectory::ConstPtr& msg,
                                 int expected_id) {
-    if (msg->uav_id != expected_id ||
+    const ros::Time now = ros::Time::now();
+    if (msg->header.stamp.isZero() || msg->header.frame_id.empty() ||
+        msg->uav_id != expected_id ||
         msg->steps != static_cast<uint32_t>(MPC_HORIZON + 1) ||
+        !std::isfinite(msg->dt) || msg->dt <= 0.0 ||
         std::abs(msg->dt - MPC_DT) > 1e-6 ||
         msg->states.size() != static_cast<size_t>(msg->steps) * 8) {
         ROS_WARN_THROTTLE(2.0, "%s: invalid trajectory from expected neighbor %d",
@@ -204,9 +220,31 @@ void neighborTrajectoryCallback(const form_nav::PredictedTrajectory::ConstPtr& m
         return;
     }
 
-    const std::string source_frame = msg->header.frame_id.empty()
-                                         ? WORLD_FRAME
-                                         : msg->header.frame_id;
+    const double message_age = (now - msg->header.stamp).toSec();
+    if (message_age > NEIGHBOR_TRAJECTORY_TIMEOUT ||
+        message_age < -NEIGHBOR_FUTURE_TOLERANCE) {
+        ROS_WARN_THROTTLE(2.0,
+                          "%s: rejected neighbor %d trajectory with age %.3f s",
+                          UAV_NAME.c_str(), expected_id, message_age);
+        return;
+    }
+
+    const auto existing = neighbor_trajectories.find(expected_id);
+    if (existing != neighbor_trajectories.end() &&
+        msg->header.stamp <= existing->second.prediction_start) {
+        ROS_WARN_THROTTLE(2.0, "%s: ignored out-of-order trajectory from neighbor %d",
+                          UAV_NAME.c_str(), expected_id);
+        return;
+    }
+
+    if (!std::all_of(msg->states.begin(), msg->states.end(),
+                     [](double value) { return std::isfinite(value); })) {
+        ROS_WARN_THROTTLE(2.0, "%s: non-finite state in trajectory from neighbor %d",
+                          UAV_NAME.c_str(), expected_id);
+        return;
+    }
+
+    const std::string& source_frame = msg->header.frame_id;
     Eigen::MatrixXd predicted_states(8, msg->steps);
     try {
         for (uint32_t i = 0; i < msg->steps; ++i) {
@@ -252,10 +290,93 @@ void neighborTrajectoryCallback(const form_nav::PredictedTrajectory::ConstPtr& m
         return;
     }
 
-    UavState neighbor;
-    neighbor.id = expected_id;
-    neighbor.predicted_states = std::move(predicted_states);
-    neighbors_map[expected_id] = std::move(neighbor);
+    NeighborTrajectoryCache cache;
+    cache.predicted_states = std::move(predicted_states);
+    cache.prediction_start = msg->header.stamp;
+    cache.dt = msg->dt;
+    neighbor_trajectories[expected_id] = std::move(cache);
+}
+
+double interpolateYaw(double from, double to, double ratio) {
+    const double delta = std::remainder(to - from, 2.0 * M_PI);
+    return from + ratio * delta;
+}
+
+bool buildAlignedNeighborStates(const ros::Time& prediction_start,
+                                std::vector<UavState>& neighbors,
+                                std::string& failure_reason) {
+    neighbors.clear();
+    neighbors.reserve(required_neighbor_ids.size());
+
+    for (int neighbor_id : required_neighbor_ids) {
+        const auto cached = neighbor_trajectories.find(neighbor_id);
+        if (cached == neighbor_trajectories.end()) {
+            failure_reason = "missing trajectory from uav" + std::to_string(neighbor_id);
+            return false;
+        }
+
+        const NeighborTrajectoryCache& trajectory = cached->second;
+        const double age = (prediction_start - trajectory.prediction_start).toSec();
+        if (age > NEIGHBOR_TRAJECTORY_TIMEOUT) {
+            std::ostringstream stream;
+            stream << "trajectory from uav" << neighbor_id << " is stale (age="
+                   << age << " s)";
+            failure_reason = stream.str();
+            neighbor_trajectories.erase(cached);
+            return false;
+        }
+        if (age < -NEIGHBOR_FUTURE_TOLERANCE) {
+            std::ostringstream stream;
+            stream << "trajectory from uav" << neighbor_id << " is in the future (skew="
+                   << -age << " s)";
+            failure_reason = stream.str();
+            return false;
+        }
+
+        const int source_steps = trajectory.predicted_states.cols();
+        if (source_steps != MPC_HORIZON + 1 || trajectory.dt <= 0.0) {
+            failure_reason = "cached trajectory shape changed for uav" +
+                             std::to_string(neighbor_id);
+            return false;
+        }
+
+        UavState neighbor;
+        neighbor.id = neighbor_id;
+        neighbor.predicted_states.resize(8, MPC_HORIZON + 1);
+        for (int step = 0; step <= MPC_HORIZON; ++step) {
+            const double query_offset = age + step * MPC_DT;
+            const double source_index = query_offset / trajectory.dt;
+
+            if (source_index <= 0.0) {
+                neighbor.predicted_states.col(step) = trajectory.predicted_states.col(0);
+                continue;
+            }
+            if (source_index >= source_steps - 1) {
+                // A received horizon is normally one communication period behind.
+                // Hold its terminal prediction where no later sample is available.
+                neighbor.predicted_states.col(step) =
+                    trajectory.predicted_states.col(source_steps - 1);
+                continue;
+            }
+
+            const int lower = static_cast<int>(std::floor(source_index));
+            const int upper = lower + 1;
+            const double ratio = source_index - lower;
+            neighbor.predicted_states.col(step) =
+                (1.0 - ratio) * trajectory.predicted_states.col(lower) +
+                ratio * trajectory.predicted_states.col(upper);
+            neighbor.predicted_states(3, step) = interpolateYaw(
+                trajectory.predicted_states(3, lower),
+                trajectory.predicted_states(3, upper), ratio);
+        }
+        neighbors.push_back(std::move(neighbor));
+    }
+    return true;
+}
+
+void publishHoldCommand() {
+    geometry_msgs::Twist hold_cmd;
+    cmd_vel_pub.publish(hold_cmd);
 }
 
 // ========== 主控制循环 ==========
@@ -263,12 +384,7 @@ void controlLoop(const ros::TimerEvent&) {
     // 传感器或全局参考未准备好时不求解。发布零速度保持连续的
     // setpoint 流，避免将无效状态解释为有效控制量。
     if (!has_pose || !has_velocity || !has_yaw || !global_traj_received) {
-        geometry_msgs::Twist hold_cmd;
-        hold_cmd.linear.x = 0.0;
-        hold_cmd.linear.y = 0.0;
-        hold_cmd.linear.z = 0.0;
-        hold_cmd.angular.z = 0.0;
-        cmd_vel_pub.publish(hold_cmd);
+        publishHoldCommand();
         return;
     }
 
@@ -283,9 +399,16 @@ void controlLoop(const ros::TimerEvent&) {
     current_mpc_state(6) = vel_world_z;
     current_mpc_state(7) = vel_body_w;
 
-    // 邻居
+    // Align every required neighbor prediction to this solve's time grid.
+    const ros::Time solve_stamp = ros::Time::now();
     std::vector<UavState> neighbors_vec;
-    for (auto& p : neighbors_map) neighbors_vec.push_back(p.second); // 末尾追加
+    std::string neighbor_failure;
+    if (!buildAlignedNeighborStates(solve_stamp, neighbors_vec, neighbor_failure)) {
+        ROS_WARN_THROTTLE(1.0, "%s: waiting for synchronized neighbors: %s",
+                          UAV_NAME.c_str(), neighbor_failure.c_str());
+        publishHoldCommand();
+        return;
+    }
 
     // 第一阶段只验证全局路径跟踪；暂时停用 ESDF 构建/更新，原代码保留。
 #if 0
@@ -333,7 +456,8 @@ void controlLoop(const ros::TimerEvent&) {
 
         std::vector<double> pred = mpc_ptr->getPredictX();
         form_nav::PredictedTrajectory shared_msg;
-        shared_msg.header.stamp = ros::Time::now();
+        // State 0 is constrained to the state sampled at solve_stamp.
+        shared_msg.header.stamp = solve_stamp;
         shared_msg.header.frame_id = WORLD_FRAME;
         shared_msg.uav_id = MY_ID;
         shared_msg.dt = MPC_DT;
@@ -422,6 +546,7 @@ void controlLoop(const ros::TimerEvent&) {
         traveled_path_pub.publish(traveled_path);
     } else {
         ROS_WARN_THROTTLE(1.0, "%s:MPC failed, holding.", UAV_NAME.c_str());
+        publishHoldCommand();
     }
 }
 
@@ -445,10 +570,25 @@ int main(int argc, char **argv) {
     double d_safe_oa = nh_private.param<double>("mpc/d_safe_oa", 0.6);
     double d_crit_oa = nh_private.param<double>("mpc/d_critical_oa", 0.3);
     double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.3);
+    double neighbor_timeout = nh_private.param<double>(
+        "communication/neighbor_trajectory_timeout", 0.3);
+    double neighbor_future_tolerance = nh_private.param<double>(
+        "communication/neighbor_future_tolerance", 0.05);
+    if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
+        throw std::runtime_error(
+            "communication/neighbor_trajectory_timeout must be positive");
+    }
+    if (!std::isfinite(neighbor_future_tolerance) ||
+        neighbor_future_tolerance < 0.0) {
+        throw std::runtime_error(
+            "communication/neighbor_future_tolerance must be non-negative");
+    }
 
     MY_ID = my_id;
     MPC_HORIZON = N;
     MPC_DT = dt;
+    NEIGHBOR_TRAJECTORY_TIMEOUT = neighbor_timeout;
+    NEIGHBOR_FUTURE_TOLERANCE = neighbor_future_tolerance;
     UAV_NAME = "uav" + std::to_string(my_id);
     LOCAL_FRAME = nh_private.param<std::string>("local_frame", UAV_NAME + "/map");
 
@@ -459,6 +599,7 @@ int main(int argc, char **argv) {
         nh, formation_config_namespace, my_id);
     const bool is_tracked = formation.leader_access;
     const std::vector<int>& neighbor_ids = formation.neighbor_ids;
+    required_neighbor_ids = neighbor_ids;
 
     ROS_INFO("%s: leader_access=%d, model=%d, neighbors=%zu, offsets=%zu",
              UAV_NAME.c_str(), is_tracked, tracking_model,
@@ -480,9 +621,11 @@ int main(int argc, char **argv) {
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
-             "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f",
+             "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f, "
+             "neighbor_timeout=%.3f, future_tolerance=%.3f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_oa, d_crit_oa, d_safe_ca);
+             d_safe_oa, d_crit_oa, d_safe_ca,
+             NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE);
 
     // 第一阶段不使用障碍物代价，暂时停用 ESDF 地图初始化；原代码保留。
 #if 0
@@ -520,7 +663,9 @@ int main(int argc, char **argv) {
     ros::Rate rate(LOOP_RATE);
 
     // 第一阶段不构建 ESDF；后续恢复障碍物代价时再启用延迟初始化逻辑。
-    ROS_INFO("%s: running single-UAV global-trajectory tracking without obstacle cost.", UAV_NAME.c_str());
+    ROS_INFO("%s: running distributed formation tracking without obstacle cost; "
+             "waiting for %zu required neighbor(s).",
+             UAV_NAME.c_str(), required_neighbor_ids.size());
 
     // 定时器
     ros::Timer timer = nh.createTimer(ros::Duration(1.0/LOOP_RATE), controlLoop);
