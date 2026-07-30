@@ -18,13 +18,28 @@ find_package(catkin REQUIRED COMPONENTS # 告诉 catkin 需要哪些 ROS 组件
   message_filters    # 消息过滤和同步机制,常用于把多个话题（如深度图+位姿、点云+里程计）按时间戳对齐
   visualization_msgs # RViz 可视化消息
   tf
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  message_generation
 )
 find_package(PCL REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(casadi REQUIRED)
 
+add_message_files(
+  FILES
+  PredictedTrajectory.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+)
+
 # 包导出信息，描述当前包的信息
-catkin_package( 
+catkin_package(
+  CATKIN_DEPENDS message_runtime std_msgs tf2 tf2_ros tf2_geometry_msgs
 #  INCLUDE_DIRS include        #表示这个包的头文件在include/
 #  LIBRARIES form_nav          #导出一个叫form_nav的库，会让其他 ROS 包的 find_package(catkin REQUIRED COMPONENTS form_nav) 生效
 #  CATKIN_DEPENDS roscpp rospy #表示“如果别人依赖我，也要一起依赖这些 ROS 组件”
@@ -64,6 +79,12 @@ target_link_libraries(astar_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_L
 add_executable(uav_base src/uav_base.cpp)
 target_link_libraries(uav_base ${catkin_LIBRARIES})
 
+add_executable(multi_uav_static_tf src/multi_uav_static_tf.cpp)
+target_link_libraries(multi_uav_static_tf ${catkin_LIBRARIES})
+
+add_executable(odom_to_world src/odom_to_world.cpp)
+target_link_libraries(odom_to_world ${catkin_LIBRARIES})
+
 # 定义一个可执行程序目标planner_node，让CMake对这四个源文件分别编译，然后把它们链接成一个最终的可执行文件dwa_node
 add_executable(dwa_node src/dwa_node.cpp src/dwa_planner.cpp src/sdf_map.cpp src/raycast.cpp)
 # 把外部库也链接到这个可执行文件
@@ -79,3 +100,4 @@ target_link_libraries(kino_astar_path_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} 
 # MPC 编队追踪节点 (包含 ESDF CasADi 避障)
 add_executable(mpc_node src/mpc_node.cpp src/mpc.cpp src/esdf_casadi.cpp src/sdf_map.cpp src/raycast.cpp)
 target_link_libraries(mpc_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES} casadi)
+add_dependencies(mpc_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

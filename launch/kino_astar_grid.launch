@@ -1,7 +1,21 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="uav_id" default="uav0" />
+  <arg name="uav_id" default="uav5" />
+  <arg name="formation_offset_x" default="2.0" />
+  <arg name="formation_offset_y" default="-2.0" />
+  <arg name="formation_offset_z" default="0.0" />
+  <arg name="world_frame" default="world" />
+
+  <node name="$(arg uav_id)_odom_to_world" pkg="form_nav" type="odom_to_world" output="screen">
+    <param name="world_frame" value="$(arg world_frame)" />
+    <param name="default_local_frame" value="$(arg uav_id)/map" />
+    <param name="input_topic" value="/$(arg uav_id)/mavros/local_position/odom" />
+    <param name="output_topic" value="/$(arg uav_id)/mavros/local_position/odom_world" />
+  </node>
+
   <node name="kino_astar_node" pkg="form_nav" type="kino_astar_node" output="screen">
+    <param name="world_frame" value="$(arg world_frame)" />
+    <rosparam param="planning_uav_formation_offset">[$(arg formation_offset_x), $(arg formation_offset_y), $(arg formation_offset_z)]</rosparam>
     <param name="grid_map/resolution" value="0.1" /> <!-- 栅格地图分辨率，单位 m/格 -->
     <param name="grid_map/map_size_x" value="50.0" /> <!-- 地图 X 方向尺寸，单位 m -->
     <param name="grid_map/map_size_y" value="50.0" /> <!-- 地图 Y 方向尺寸，单位 m -->
@@ -45,8 +59,8 @@
     <remap from="~local_cloud" to="/pcl_render_node/cloud"/><!-- 外部功能包发布,将收到的点云插入 PCL KdTree做椭球体-点云碰撞检查。 -->
 
     <remap from="/grid_map/cloud" to="/map_generator/global_cloud"/>
-    <remap from="/grid_map/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>
-    <remap from="/kino_astar/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>
+    <remap from="/grid_map/odom" to="/$(arg uav_id)/mavros/local_position/odom_world"/>
+    <remap from="/kino_astar/odom" to="/$(arg uav_id)/mavros/local_position/odom_world"/>
   </node>
 
 </launch>

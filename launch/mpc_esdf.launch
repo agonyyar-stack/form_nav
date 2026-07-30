@@ -1,5 +1,7 @@
 <launch>
     <arg name="uav_id" default="uav0" />
+    <arg name="my_id" default="0" />
+    <arg name="world_frame" default="world" />
     <!-- 启动DWA仿真节点 -->
     <node pkg="form_nav" name="$(arg uav_id)_mpc_node"  type="mpc_node" output="screen">
         <param name="sdf_map/resolution" value="0.1" />
@@ -20,7 +22,9 @@
         <param name="sdf_map/pose_type" value="2" />
         <param name="sdf_map/frame_id" value="map" />
 
-        <param name="my_id" value="0" />
+        <param name="my_id" value="$(arg my_id)" />
+        <param name="world_frame" value="$(arg world_frame)" />
+        <param name="local_frame" value="$(arg uav_id)/map" />
         <param name="is_tracked" value="true" />
         <param name="tracking_model" value="1" />
 

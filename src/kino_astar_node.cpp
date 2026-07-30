@@ -2,6 +2,8 @@
 #include <nav_msgs/Path.h>
 #include <std_msgs/Float64MultiArray.h>
 #include <visualization_msgs/Marker.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2_ros/transform_listener.h>
 #include <form_nav/grid_map.h>
 #include <form_nav/kino_astar.h>
 
@@ -16,6 +18,10 @@ ros::Publisher goal_marker_pub;
 
 nav_msgs::Odometry::ConstPtr odom_;
 std::vector<Eigen::Vector3d> path;
+std::string world_frame = "world";
+Eigen::Vector3d planning_uav_formation_offset = Eigen::Vector3d::Zero();
+std::unique_ptr<tf2_ros::Buffer> tf_buffer;
+std::unique_ptr<tf2_ros::TransformListener> tf_listener;
 
 void OdomCallback(const nav_msgs::Odometry::ConstPtr& odom)
 { 
@@ -30,8 +36,23 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
     return;
   }
 
-  Eigen::Vector3d end_pt(msg->pose.position.x, msg->pose.position.y, 1.0);
-  Eigen::Vector3d start_pt(odom_->pose.pose.position.x - 23, odom_->pose.pose.position.y, odom_->pose.pose.position.z);
+  geometry_msgs::PoseStamped goal_world;
+  try
+  {
+    geometry_msgs::PoseStamped goal = *msg;
+    if (goal.header.frame_id.empty()) goal.header.frame_id = world_frame;
+    goal_world = tf_buffer->transform(goal, world_frame, ros::Duration(0.05));
+  }
+  catch (const tf2::TransformException& error)
+  {
+    ROS_WARN("Cannot transform goal to %s: %s", world_frame.c_str(), error.what());
+    return;
+  }
+
+  Eigen::Vector3d end_pt(goal_world.pose.position.x, goal_world.pose.position.y, 1.0);
+  const Eigen::Vector3d planning_uav_world(
+      odom_->pose.pose.position.x, odom_->pose.pose.position.y, odom_->pose.pose.position.z);
+  Eigen::Vector3d start_pt = planning_uav_world - planning_uav_formation_offset;
   Eigen::Vector3d start_vel(odom_->twist.twist.linear.x, odom_->twist.twist.linear.y, odom_->twist.twist.linear.z);
   Eigen::Vector3d end_vel(0, 0, 0);
   std::cout << "Start point: " << start_pt.transpose() << std::endl;
@@ -40,7 +61,7 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
   // --- goal visualization ---
   {
     visualization_msgs::Marker goal_marker;
-    goal_marker.header.frame_id = "world";
+    goal_marker.header.frame_id = world_frame;
     goal_marker.header.stamp = ros::Time::now();
     goal_marker.ns = "kino_astar/goal";
     goal_marker.id = 0;
@@ -67,7 +88,7 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
     // --- path Marker ---
     {
       visualization_msgs::Marker path_marker;
-      path_marker.header.frame_id = "world";
+      path_marker.header.frame_id = world_frame;
       path_marker.header.stamp = ros::Time::now();
       path_marker.ns = "kino_astar/path";
       path_marker.id = 0;
@@ -129,6 +150,20 @@ int main(int argc, char** argv)
 {
   ros::init(argc, argv, "kino_astar_node");
   ros::NodeHandle nh("~");
+
+  nh.param<std::string>("world_frame", world_frame, "world");
+  std::vector<double> formation_offset;
+  nh.param<std::vector<double>>("planning_uav_formation_offset", formation_offset,
+                                std::vector<double>{2.0, -2.0, 0.0});
+  if (formation_offset.size() != 3)
+  {
+    ROS_FATAL("planning_uav_formation_offset must contain [x, y, z]");
+    return 1;
+  }
+  planning_uav_formation_offset =
+      Eigen::Vector3d(formation_offset[0], formation_offset[1], formation_offset[2]);
+  tf_buffer = std::make_unique<tf2_ros::Buffer>();
+  tf_listener = std::make_unique<tf2_ros::TransformListener>(*tf_buffer);
 
   goal_sub = nh.subscribe<geometry_msgs::PoseStamped>("/move_base_simple/goal", 10, &GoalCallback);
   odom_sub = nh.subscribe<nav_msgs::Odometry>("/kino_astar/odom", 10, &OdomCallback);

@@ -20,6 +20,11 @@
         <arg name="paused" value="$(arg paused)"/> <!-- true 启动后暂停，方便你先配置好再手动开始仿真 -->
     </include>
 
+    <!-- Coordinate origins are independent from the MPC formation offsets M_i. -->
+    <node pkg="form_nav" type="multi_uav_static_tf" name="multi_uav_static_tf" output="screen">
+        <rosparam command="load" file="$(find form_nav)/config/multi_uav_frames.yaml"/>
+    </node>
+
     <!-- UAV0 -->
     <group ns="uav0">
         <!-- MAVROS and vehicle configs -->
@@ -63,8 +68,6 @@
         <!-- tf和tf2_ros的区别：
         1. tf2_ros是tf的升级版本，提供了更好的性能和功能。
         2. tf2_ros在ROS2中得到了更广泛的支持和使用，而tf主要用于ROS1中。 -->
-        <node pkg="tf" type="static_transform_publisher" name="world_to_uav$(arg ID)_map" 
-              args="$(arg x) $(arg y) $(arg z) $(arg R) $(arg P) $(arg Y) world uav$(arg ID)/map 100" />
     </group>
     <!-- UAV1 -->
     <!-- <group ns="uav1"> -->

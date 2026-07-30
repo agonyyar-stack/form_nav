@@ -3,20 +3,31 @@
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
-#include <sensor_msgs/Imu.h>
+#include <geometry_msgs/Vector3Stamped.h>
 #include <std_msgs/Float64MultiArray.h>
 #include <nav_msgs/Path.h>
 #include <visualization_msgs/Marker.h>
 #include <tf2/utils.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2_ros/transform_listener.h>
 #include <Eigen/Dense>
 #include <cmath>
 #include "form_nav/mpc.h"
 #include "form_nav/esdf_casadi.h"
 #include "form_nav/sdf_map.h"
+#include "form_nav/PredictedTrajectory.h"
 
 // --- 基本配置 ---
 std::string UAV_NAME;
+std::string WORLD_FRAME = "world";
+std::string LOCAL_FRAME;
+int MY_ID = 0;
+int MPC_HORIZON = 10;
+double MPC_DT = 0.05;
 const double LOOP_RATE = 20.0;
+
+std::unique_ptr<tf2_ros::Buffer> tf_buffer_ptr;
+std::unique_ptr<tf2_ros::TransformListener> tf_listener_ptr;
 
 // --- ROS 通信 ---
 ros::Publisher cmd_vel_pub;
@@ -138,30 +149,112 @@ double findClosestWaypointTime(const Eigen::VectorXd& state) {
 
 // ========== MAVROS 回调 ==========
 void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
-    // 转换为world坐标系下的状态量，这里的 x/y/z 是世界坐标系下的位置
-    current_mpc_state(0) = msg->pose.position.x - 23.0; //=================后面需参数化，包括邻居的状态量===============
-    current_mpc_state(1) = msg->pose.position.y;
-    current_mpc_state(2) = msg->pose.position.z;
-    has_pose = true;
+    try {
+        geometry_msgs::PoseStamped source = *msg;
+        if (source.header.frame_id.empty()) source.header.frame_id = LOCAL_FRAME;
+        const auto world_pose = tf_buffer_ptr->transform(
+            source, WORLD_FRAME, ros::Duration(0.05));
+        current_mpc_state(0) = world_pose.pose.position.x;
+        current_mpc_state(1) = world_pose.pose.position.y;
+        current_mpc_state(2) = world_pose.pose.position.z;
+        current_mpc_state(3) = tf2::getYaw(world_pose.pose.orientation);
+        has_pose = true;
+        has_yaw = true;
+    } catch (const tf2::TransformException& error) {
+        ROS_WARN_THROTTLE(2.0, "%s: pose transform to %s failed: %s",
+                          UAV_NAME.c_str(), WORLD_FRAME.c_str(), error.what());
+    }
 }
 
 void velocityCallbackWorld(const geometry_msgs::TwistStamped::ConstPtr& msg) {
-    vel_world_x = msg->twist.linear.x;
-    vel_world_y = msg->twist.linear.y;
-    vel_world_z = msg->twist.linear.z;
-    vel_body_w = msg->twist.angular.z;
-    has_velocity = true;
+    try {
+        const std::string source_frame = msg->header.frame_id.empty()
+                                             ? LOCAL_FRAME
+                                             : msg->header.frame_id;
+        geometry_msgs::Vector3Stamped linear_source;
+        linear_source.header = msg->header;
+        linear_source.header.frame_id = source_frame;
+        linear_source.vector = msg->twist.linear;
+        geometry_msgs::Vector3Stamped angular_source = linear_source;
+        angular_source.vector = msg->twist.angular;
+        const auto linear_world = tf_buffer_ptr->transform(
+            linear_source, WORLD_FRAME, ros::Duration(0.05));
+        const auto angular_world = tf_buffer_ptr->transform(
+            angular_source, WORLD_FRAME, ros::Duration(0.05));
+        vel_world_x = linear_world.vector.x;
+        vel_world_y = linear_world.vector.y;
+        vel_world_z = linear_world.vector.z;
+        vel_body_w = angular_world.vector.z;
+        has_velocity = true;
+    } catch (const tf2::TransformException& error) {
+        ROS_WARN_THROTTLE(2.0, "%s: velocity transform to %s failed: %s",
+                          UAV_NAME.c_str(), WORLD_FRAME.c_str(), error.what());
+    }
 }
 
-void imuCallback(const sensor_msgs::Imu::ConstPtr& msg) {
-    tf2::Quaternion q(
-        msg->orientation.x, msg->orientation.y,
-        msg->orientation.z, msg->orientation.w);
-    tf2::Matrix3x3 m(q);
-    double roll, pitch, yaw;
-    m.getRPY(roll, pitch, yaw);
-    current_mpc_state(3) = yaw;
-    has_yaw = true;
+void neighborTrajectoryCallback(const form_nav::PredictedTrajectory::ConstPtr& msg,
+                                int expected_id) {
+    if (msg->uav_id != expected_id ||
+        msg->steps != static_cast<uint32_t>(MPC_HORIZON + 1) ||
+        std::abs(msg->dt - MPC_DT) > 1e-6 ||
+        msg->states.size() != static_cast<size_t>(msg->steps) * 8) {
+        ROS_WARN_THROTTLE(2.0, "%s: invalid trajectory from expected neighbor %d",
+                          UAV_NAME.c_str(), expected_id);
+        return;
+    }
+
+    const std::string source_frame = msg->header.frame_id.empty()
+                                         ? WORLD_FRAME
+                                         : msg->header.frame_id;
+    Eigen::MatrixXd predicted_states(8, msg->steps);
+    try {
+        for (uint32_t i = 0; i < msg->steps; ++i) {
+            const size_t offset = static_cast<size_t>(i) * 8;
+            geometry_msgs::PoseStamped source_pose;
+            source_pose.header = msg->header;
+            source_pose.header.frame_id = source_frame;
+            source_pose.pose.position.x = msg->states[offset + 0];
+            source_pose.pose.position.y = msg->states[offset + 1];
+            source_pose.pose.position.z = msg->states[offset + 2];
+            tf2::Quaternion source_orientation;
+            source_orientation.setRPY(0.0, 0.0, msg->states[offset + 3]);
+            source_pose.pose.orientation = tf2::toMsg(source_orientation);
+            const auto world_pose = tf_buffer_ptr->transform(
+                source_pose, WORLD_FRAME, ros::Duration(0.05));
+
+            geometry_msgs::Vector3Stamped source_velocity;
+            source_velocity.header = source_pose.header;
+            source_velocity.vector.x = msg->states[offset + 4];
+            source_velocity.vector.y = msg->states[offset + 5];
+            source_velocity.vector.z = msg->states[offset + 6];
+            const auto world_velocity = tf_buffer_ptr->transform(
+                source_velocity, WORLD_FRAME, ros::Duration(0.05));
+
+            const double yaw = tf2::getYaw(world_pose.pose.orientation);
+            const double cos_yaw = std::cos(yaw);
+            const double sin_yaw = std::sin(yaw);
+            predicted_states(0, i) = world_pose.pose.position.x;
+            predicted_states(1, i) = world_pose.pose.position.y;
+            predicted_states(2, i) = world_pose.pose.position.z;
+            predicted_states(3, i) = yaw;
+            // Shared velocities are world-frame; the MPC model uses body-frame velocities.
+            predicted_states(4, i) = cos_yaw * world_velocity.vector.x +
+                                     sin_yaw * world_velocity.vector.y;
+            predicted_states(5, i) = -sin_yaw * world_velocity.vector.x +
+                                     cos_yaw * world_velocity.vector.y;
+            predicted_states(6, i) = world_velocity.vector.z;
+            predicted_states(7, i) = msg->states[offset + 7];
+        }
+    } catch (const tf2::TransformException& error) {
+        ROS_WARN_THROTTLE(2.0, "%s: neighbor %d trajectory transform failed: %s",
+                          UAV_NAME.c_str(), expected_id, error.what());
+        return;
+    }
+
+    UavState neighbor;
+    neighbor.id = expected_id;
+    neighbor.predicted_states = std::move(predicted_states);
+    neighbors_map[expected_id] = std::move(neighbor);
 }
 
 // ========== 主控制循环 ==========
@@ -238,14 +331,35 @@ void controlLoop(const ros::TimerEvent&) {
         cmd_vel_pub.publish(cmd);
 
         std::vector<double> pred = mpc_ptr->getPredictX();
-        std_msgs::Float64MultiArray msg;
-        msg.data = pred;
-        share_path_pub.publish(msg);
-        predicted_path_pub.publish(msg);
+        form_nav::PredictedTrajectory shared_msg;
+        shared_msg.header.stamp = ros::Time::now();
+        shared_msg.header.frame_id = WORLD_FRAME;
+        shared_msg.uav_id = MY_ID;
+        shared_msg.dt = MPC_DT;
+        shared_msg.steps = pred.size() / 8;
+        shared_msg.states.reserve(pred.size());
+        for (uint32_t i = 0; i < shared_msg.steps; ++i) {
+            const size_t offset = static_cast<size_t>(i) * 8;
+            const double predicted_yaw = pred[offset + 3];
+            const double predicted_cos = std::cos(predicted_yaw);
+            const double predicted_sin = std::sin(predicted_yaw);
+            const double predicted_vx_world = predicted_cos * pred[offset + 4] -
+                                              predicted_sin * pred[offset + 5];
+            const double predicted_vy_world = predicted_sin * pred[offset + 4] +
+                                              predicted_cos * pred[offset + 5];
+            shared_msg.states.insert(shared_msg.states.end(), {
+                pred[offset + 0], pred[offset + 1], pred[offset + 2], predicted_yaw,
+                predicted_vx_world, predicted_vy_world, pred[offset + 6], pred[offset + 7]});
+        }
+        share_path_pub.publish(shared_msg);
+
+        std_msgs::Float64MultiArray viz_msg;
+        viz_msg.data = pred;
+        predicted_path_pub.publish(viz_msg);
 
         // --- 预测轨迹 Marker 可视化 ---
         visualization_msgs::Marker pred_marker;
-        pred_marker.header.frame_id = "world";
+        pred_marker.header.frame_id = WORLD_FRAME;
         pred_marker.header.stamp = ros::Time::now();
         pred_marker.ns = "mpc_predicted_path";
         pred_marker.id = 0;
@@ -270,7 +384,7 @@ void controlLoop(const ros::TimerEvent&) {
 
         // --- 点状 Marker（预测步点球体）---
         visualization_msgs::Marker points_marker;
-        points_marker.header.frame_id = "world";
+        points_marker.header.frame_id = WORLD_FRAME;
         points_marker.header.stamp = ros::Time::now();
         points_marker.ns = "mpc_predict_points";
         points_marker.id = 0;
@@ -295,13 +409,13 @@ void controlLoop(const ros::TimerEvent&) {
 
         // --- 已走过轨迹 ---
         geometry_msgs::PoseStamped traveled_pose;
-        traveled_pose.header.frame_id = "world";
+        traveled_pose.header.frame_id = WORLD_FRAME;
         traveled_pose.header.stamp = ros::Time::now();
         traveled_pose.pose.position.x = current_mpc_state(0);
         traveled_pose.pose.position.y = current_mpc_state(1);
         traveled_pose.pose.position.z = current_mpc_state(2);
         traveled_pose.pose.orientation.w = 1.0;
-        traveled_path.header.frame_id = "world";
+        traveled_path.header.frame_id = WORLD_FRAME;
         traveled_path.header.stamp = ros::Time::now();
         traveled_path.poses.push_back(traveled_pose);
         traveled_path_pub.publish(traveled_path);
@@ -321,6 +435,7 @@ int main(int argc, char **argv) {
     int my_id          = nh_private.param<int>("my_id", 0);
     bool is_tracked    = nh_private.param<bool>("is_tracked", false);
     int tracking_model = nh_private.param<int>("tracking_model", 1);
+    WORLD_FRAME = nh_private.param<std::string>("world_frame", "world");
     std::vector<int> neighbor_ids = nh_private.param<std::vector<int>>("neighbor_ids", std::vector<int>());
     int   N      = nh_private.param<int>("mpc/N", 10);
     double dt    = nh_private.param<double>("mpc/dt", 0.05);
@@ -330,7 +445,14 @@ int main(int argc, char **argv) {
     double d_crit_oa = nh_private.param<double>("mpc/d_critical_oa", 0.3);
     double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.3);
 
+    MY_ID = my_id;
+    MPC_HORIZON = N;
+    MPC_DT = dt;
     UAV_NAME = "uav" + std::to_string(my_id);
+    LOCAL_FRAME = nh_private.param<std::string>("local_frame", UAV_NAME + "/map");
+
+    tf_buffer_ptr = std::make_unique<tf2_ros::Buffer>();
+    tf_listener_ptr = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_ptr);
 
     // 编队偏移量表 {id → [x, y, z, yaw]}
     std::map<int, std::vector<double>> formation_offsets;
@@ -398,7 +520,6 @@ int main(int argc, char **argv) {
     // --- 订阅（位置、速度、姿态、邻居预测状态） --- 
     ros::Subscriber pose_sub = nh.subscribe("/" + UAV_NAME + "/mavros/local_position/pose", 10, poseCallback);
     ros::Subscriber vel_sub = nh.subscribe("/" + UAV_NAME + "/mavros/local_position/velocity_local", 10, velocityCallbackWorld);
-    ros::Subscriber imu_sub = nh.subscribe("/" + UAV_NAME + "/mavros/imu/data", 10, imuCallback);
 
     // 全局轨迹订阅
     ros::Subscriber global_traj_sub = nh.subscribe("/kino_astar/trajectory", 1, globalTrajCallback);
@@ -407,26 +528,17 @@ int main(int argc, char **argv) {
     std::vector<ros::Subscriber> neighbor_subs;
     for (int nid : neighbor_ids) {
         std::string topic = "/uav" + std::to_string(nid) + "/predicted_path_share";
-        neighbor_subs.push_back(nh.subscribe<std_msgs::Float64MultiArray>(topic, 10,  //这里可以不显示说明数据类型吗
-            [nid](const std_msgs::Float64MultiArray::ConstPtr& msg) {
-                int n_steps = msg->data.size() / 8;
-                if (n_steps == 0) return;
-                Eigen::MatrixXd pred_states(8, n_steps);
-                int idx = 0;
-                for (int i = 0; i < n_steps; ++i)
-                    for (int j = 0; j < 8; ++j) // 这里前后置完全一样，通常优先用 ++j，因为对迭代器等复杂类型能避免一次不必要的临时对象拷贝
-                        pred_states(j, i) = msg->data[idx++];
-                UavState neighbor;
-                neighbor.id = nid;
-                neighbor.predicted_states = pred_states;
-                neighbors_map[nid] = neighbor;
+        neighbor_subs.push_back(nh.subscribe<form_nav::PredictedTrajectory>(
+            topic, 10,
+            [nid](const form_nav::PredictedTrajectory::ConstPtr& message) {
+                neighborTrajectoryCallback(message, nid);
             }));
     }
 
     // --- 发布（setpoint、速度、共享预测状态、可视化） ---
     local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("/" + UAV_NAME + "/mavros/setpoint_position/local", 10);
     cmd_vel_pub = nh.advertise<geometry_msgs::Twist>("/" + UAV_NAME + "/mavros/setpoint_velocity/cmd_vel_unstamped", 1);
-    share_path_pub = nh.advertise<std_msgs::Float64MultiArray>("/" + UAV_NAME + "/predicted_path_share", 1);
+    share_path_pub = nh.advertise<form_nav::PredictedTrajectory>("/" + UAV_NAME + "/predicted_path_share", 1);
     predicted_path_pub = nh.advertise<std_msgs::Float64MultiArray>("/" + UAV_NAME + "/predicted_path_viz", 1);
     predicted_path_viz_pub = nh.advertise<visualization_msgs::Marker>("/" + UAV_NAME + "/mpc_predicted_path_marker", 10);
     traveled_path_pub = nh.advertise<nav_msgs::Path>("/" + UAV_NAME + "/traveled_path", 10);
