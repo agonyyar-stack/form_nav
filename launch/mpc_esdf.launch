@@ -2,6 +2,15 @@
     <arg name="uav_id" default="uav0" />
     <arg name="my_id" default="0" />
     <arg name="world_frame" default="world" />
+    <arg name="formation_config_file" default="$(find form_nav)/config/formations.yaml" />
+    <arg name="formation_config_namespace" default="/formation_config" />
+    <arg name="load_formation_config" default="true" />
+
+    <!-- A multi-UAV parent launch can load this once and pass load_formation_config=false. -->
+    <group if="$(arg load_formation_config)">
+        <rosparam command="load" file="$(arg formation_config_file)"
+                  ns="$(arg formation_config_namespace)" />
+    </group>
     <!-- 启动DWA仿真节点 -->
     <node pkg="form_nav" name="$(arg uav_id)_mpc_node"  type="mpc_node" output="screen">
         <param name="sdf_map/resolution" value="0.1" />
@@ -25,7 +34,7 @@
         <param name="my_id" value="$(arg my_id)" />
         <param name="world_frame" value="$(arg world_frame)" />
         <param name="local_frame" value="$(arg uav_id)/map" />
-        <param name="is_tracked" value="true" />
+        <param name="formation_config_namespace" value="$(arg formation_config_namespace)" />
         <param name="tracking_model" value="1" />
 
         <!-- MPC 可调参数 -->
@@ -36,11 +45,6 @@
         <param name="mpc/d_safe_oa" value="0.6" />       <!-- 障碍物安全距离 (m) -->
         <param name="mpc/d_critical_oa" value="0.3" />   <!-- 障碍物临界距离 (m) -->
         <param name="mpc/d_safe_ca" value="0.3" />       <!-- 编队内安全距离 (m) -->
-        <!-- <rosparam param="neighbor_ids">[1, 2]</rosparam> -->
-        <rosparam param="formation_offsets">
-          "0": [0, 0, 0, 0]
-        </rosparam>
-
         <remap from="/sdf_map/cloud" to="/map_generator/global_cloud"/> 
         <remap from="/sdf_map/occupancy_inflate" to="/$(arg uav_id)/sdf_map/occupancy_inflate"/>
         <remap from="/sdf_map/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>

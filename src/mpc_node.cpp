@@ -13,6 +13,7 @@
 #include <Eigen/Dense>
 #include <cmath>
 #include "form_nav/mpc.h"
+#include "form_nav/formation_config.h"
 #include "form_nav/esdf_casadi.h"
 #include "form_nav/sdf_map.h"
 #include "form_nav/PredictedTrajectory.h"
@@ -433,10 +434,10 @@ int main(int argc, char **argv) {
     try {
     // --- 参数读取 ---
     int my_id          = nh_private.param<int>("my_id", 0);
-    bool is_tracked    = nh_private.param<bool>("is_tracked", false);
     int tracking_model = nh_private.param<int>("tracking_model", 1);
     WORLD_FRAME = nh_private.param<std::string>("world_frame", "world");
-    std::vector<int> neighbor_ids = nh_private.param<std::vector<int>>("neighbor_ids", std::vector<int>());
+    const std::string formation_config_namespace =
+        nh_private.param<std::string>("formation_config_namespace", "/formation_config");
     int   N      = nh_private.param<int>("mpc/N", 10);
     double dt    = nh_private.param<double>("mpc/dt", 0.05);
     double u_max = nh_private.param<double>("mpc/u_max", 6.0);
@@ -454,48 +455,21 @@ int main(int argc, char **argv) {
     tf_buffer_ptr = std::make_unique<tf2_ros::Buffer>();
     tf_listener_ptr = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_ptr);
 
-    // 编队偏移量表 {id → [x, y, z, yaw]}
-    std::map<int, std::vector<double>> formation_offsets;
-    // XmlRpc::XmlRpcValue 是 ROS 参数服务器的通用容器类型，可以容纳 int/double/string/array/struct 等任意 YAML 结构
-    XmlRpc::XmlRpcValue offsets_param;
-    if (nh_private.getParam("formation_offsets", offsets_param)) {
-        if (offsets_param.getType() == XmlRpc::XmlRpcValue::TypeStruct) {
-            for (auto it = offsets_param.begin(); it != offsets_param.end(); ++it) {
-                // it->first 是键，std::stoi 转为 int
-                int id = std::stoi(it->first);
-                // 初始化 4 个元素为 0 的偏移向量 [0,0,0,0]
-                std::vector<double> offset(4, 0.0);
-                // it->second 是值
-                for (int i = 0; i < it->second.size() && i < 4; ++i) {
-                    auto& val = it->second[i];
-                    if (val.getType() == XmlRpc::XmlRpcValue::TypeInt)
-                        offset[i] = static_cast<double>(static_cast<int>(val));
-                    else if (val.getType() == XmlRpc::XmlRpcValue::TypeDouble)
-                        offset[i] = static_cast<double>(val);
-                }
-                formation_offsets[id] = offset;
-            }
-            ROS_INFO("formation_offsets parsed successfully");
-        } else {
-            ROS_WARN("formation_offsets param exists but is not a struct (type=%d), ignoring.", 
-                     offsets_param.getType());
-        }
-    } else {
-        ROS_INFO("formation_offsets not found (OK)");
-    }
-    // 如果 formation_offsets 里没有自己的 ID，补一个 [0,0,0,0]
-    if (formation_offsets.find(my_id) == formation_offsets.end())
-        formation_offsets[my_id] = {0.0, 0.0, 0.0, 0.0};
+    const FormationConfig formation = FormationConfig::load(
+        nh, formation_config_namespace, my_id);
+    const bool is_tracked = formation.leader_access;
+    const std::vector<int>& neighbor_ids = formation.neighbor_ids;
 
-    ROS_INFO("%s: my_id=%d, is_tracked=%d, model=%d, neighbors=%zu, offsets=%zu",
-             UAV_NAME.c_str(), my_id, is_tracked, tracking_model, neighbor_ids.size(), formation_offsets.size());
+    ROS_INFO("%s: leader_access=%d, model=%d, neighbors=%zu, offsets=%zu",
+             UAV_NAME.c_str(), is_tracked, tracking_model,
+             neighbor_ids.size(), formation.offsets.size());
 
     // --- MPC 初始化 ---
     mpc_ptr.reset(new Mpc());
     mpc_ptr->setMyId(my_id);
     mpc_ptr->setTracked(is_tracked);
     mpc_ptr->setTrackingModel(tracking_model);
-    mpc_ptr->setFormationOffsets(formation_offsets);
+    mpc_ptr->setFormationOffsets(formation.offsets);
 
     mpc_ptr->setPredictionHorizon(N);
     mpc_ptr->setTimeStep(dt);

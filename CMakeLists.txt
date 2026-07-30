@@ -98,6 +98,6 @@ add_executable(kino_astar_path_node src/kino_astar_path_node.cpp src/kino_astar.
 target_link_libraries(kino_astar_path_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES})
 
 # MPC 编队追踪节点 (包含 ESDF CasADi 避障)
-add_executable(mpc_node src/mpc_node.cpp src/mpc.cpp src/esdf_casadi.cpp src/sdf_map.cpp src/raycast.cpp)
+add_executable(mpc_node src/mpc_node.cpp src/mpc.cpp src/formation_config.cpp src/esdf_casadi.cpp src/sdf_map.cpp src/raycast.cpp)
 target_link_libraries(mpc_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES} casadi)
 add_dependencies(mpc_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

@@ -61,6 +61,7 @@
     <!-- 局部 MPC -->
     <include file="$(find form_nav)/launch/mpc_esdf.launch">
         <arg name="uav_id" value="uav0" />
+        <arg name="my_id" value="0" />
     </include>
 
 </launch>
