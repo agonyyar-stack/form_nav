@@ -34,6 +34,8 @@ double MPC_DT = 0.05;
 double NEIGHBOR_TRAJECTORY_TIMEOUT = 0.3;
 double NEIGHBOR_FUTURE_TOLERANCE = 0.05;
 double GLOBAL_PROGRESS_TIMEOUT = 0.3;
+double HOVER_COMMAND_DEADBAND = 0.03;
+double HOVER_YAW_RATE_DEADBAND = 0.03;
 const double LOOP_RATE = 20.0;
 
 std::unique_ptr<tf2_ros::Buffer> tf_buffer_ptr;
@@ -85,6 +87,7 @@ std::vector<GlobalWaypoint> global_traj;
 bool global_traj_received = false;
 uint32_t current_trajectory_id = 0;
 Eigen::Vector4d my_formation_offset = Eigen::Vector4d::Zero();
+bool terminal_hover_latched = false;
 
 struct GlobalProgressCache {
     ros::Time stamp;
@@ -138,6 +141,7 @@ void globalTrajCallback(const form_nav::GlobalTrajectory::ConstPtr& msg) {
     global_traj_received = true;
     current_trajectory_id = msg->trajectory_id;
     last_global_idx = 0;
+    terminal_hover_latched = false;
     global_progress = GlobalProgressCache{};
     neighbor_trajectories.clear();
     mpc_ptr->setGlobalTrajectory(global_traj);
@@ -427,7 +431,9 @@ bool buildAlignedNeighborStates(const ros::Time& prediction_start,
 }
 
 void publishHoldCommand() {
-    geometry_msgs::Twist hold_cmd;
+    geometry_msgs::TwistStamped hold_cmd;
+    hold_cmd.header.stamp = ros::Time::now();
+    hold_cmd.header.frame_id = WORLD_FRAME;
     cmd_vel_pub.publish(hold_cmd);
 }
 
@@ -471,6 +477,13 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
             return;
         }
         t0 = global_progress.path_time;
+    }
+
+    if (!terminal_hover_latched &&
+        t0 >= global_traj.back().t - 1e-6) {
+        terminal_hover_latched = true;
+        ROS_INFO("%s: reached final trajectory reference; entering terminal hover mode.",
+                 UAV_NAME.c_str());
     }
 
     // World → Body 速度转换
@@ -520,19 +533,34 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
 #endif
 
     // 求解 MPC (t0 = 最近点时间)
-    bool ok = mpc_ptr->solve(t0, neighbors_vec, current_mpc_state);
+    bool ok = mpc_ptr->solve(
+        t0, neighbors_vec, current_mpc_state, terminal_hover_latched);
     // 可视化
     if (ok) {
         auto u = mpc_ptr->getFirstU(); // body
+        if (terminal_hover_latched) {
+            const double linear_command_norm =
+                std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+            if (linear_command_norm < HOVER_COMMAND_DEADBAND) {
+                u[0] = 0.0;
+                u[1] = 0.0;
+                u[2] = 0.0;
+            }
+            if (std::abs(u[3]) < HOVER_YAW_RATE_DEADBAND) {
+                u[3] = 0.0;
+            }
+        }
         // body → world
         double vx = cos_psi * u[0] - sin_psi * u[1];
         double vy = sin_psi * u[0] + cos_psi * u[1];
 
-        geometry_msgs::Twist cmd;
-        cmd.linear.x = vx;
-        cmd.linear.y = vy;
-        cmd.linear.z = u[2];
-        cmd.angular.z = u[3];
+        geometry_msgs::TwistStamped cmd;
+        cmd.header.stamp = ros::Time::now();
+        cmd.header.frame_id = "world";
+        cmd.twist.linear.x = vx;
+        cmd.twist.linear.y = vy;
+        cmd.twist.linear.z = u[2];
+        cmd.twist.angular.z = u[3];
         cmd_vel_pub.publish(cmd);
 
         std::vector<double> pred = mpc_ptr->getPredictX();
@@ -644,7 +672,7 @@ int main(int argc, char **argv) {
     WORLD_FRAME = nh_private.param<std::string>("world_frame", "world");
     const std::string formation_config_namespace =
         nh_private.param<std::string>("formation_config_namespace", "/formation_config");
-    int   N      = nh_private.param<int>("mpc/N", 10);
+    int N        = nh_private.param<int>("mpc/N", 10);
     double dt    = nh_private.param<double>("mpc/dt", 0.05);
     double u_max = nh_private.param<double>("mpc/u_max", 6.0);
     double w_max = nh_private.param<double>("mpc/w_max", 2.0);
@@ -657,6 +685,14 @@ int main(int argc, char **argv) {
         "communication/neighbor_future_tolerance", 0.05);
     double progress_timeout = nh_private.param<double>(
         "global_progress/timeout", 0.3);
+    double hover_velocity_weight = nh_private.param<double>(
+        "terminal_hover/velocity_weight", 2000.0);
+    double hover_yaw_rate_weight = nh_private.param<double>(
+        "terminal_hover/yaw_rate_weight", 200.0);
+    double hover_command_deadband = nh_private.param<double>(
+        "terminal_hover/command_deadband", 0.03);
+    double hover_yaw_rate_deadband = nh_private.param<double>(
+        "terminal_hover/yaw_rate_deadband", 0.03);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
         throw std::runtime_error(
             "communication/neighbor_trajectory_timeout must be positive");
@@ -669,6 +705,14 @@ int main(int argc, char **argv) {
     if (!std::isfinite(progress_timeout) || progress_timeout <= 0.0) {
         throw std::runtime_error("global_progress/timeout must be positive");
     }
+    if (!std::isfinite(hover_velocity_weight) || hover_velocity_weight <= 0.0 ||
+        !std::isfinite(hover_yaw_rate_weight) || hover_yaw_rate_weight <= 0.0) {
+        throw std::runtime_error("terminal hover velocity weights must be positive");
+    }
+    if (!std::isfinite(hover_command_deadband) || hover_command_deadband < 0.0 ||
+        !std::isfinite(hover_yaw_rate_deadband) || hover_yaw_rate_deadband < 0.0) {
+        throw std::runtime_error("terminal hover command deadbands must be non-negative");
+    }
 
     MY_ID = my_id;
     MPC_HORIZON = N;
@@ -676,6 +720,8 @@ int main(int argc, char **argv) {
     NEIGHBOR_TRAJECTORY_TIMEOUT = neighbor_timeout;
     NEIGHBOR_FUTURE_TOLERANCE = neighbor_future_tolerance;
     GLOBAL_PROGRESS_TIMEOUT = progress_timeout;
+    HOVER_COMMAND_DEADBAND = hover_command_deadband;
+    HOVER_YAW_RATE_DEADBAND = hover_yaw_rate_deadband;
     UAV_NAME = "uav" + std::to_string(my_id);
     LOCAL_FRAME = nh_private.param<std::string>("local_frame", UAV_NAME + "/map");
 
@@ -709,13 +755,17 @@ int main(int argc, char **argv) {
     mpc_ptr->setObstacleSafeDistance(d_safe_oa);
     mpc_ptr->setObstacleCriticalDistance(d_crit_oa);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
+    mpc_ptr->setHoverVelocityWeights(
+        hover_velocity_weight, hover_yaw_rate_weight);
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
              "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f, "
-             "neighbor_timeout=%.3f, future_tolerance=%.3f",
+             "neighbor_timeout=%.3f, future_tolerance=%.3f, "
+             "hover_velocity_weight=%.1f, hover_deadband=%.3f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
              d_safe_oa, d_crit_oa, d_safe_ca,
-             NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE);
+             NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
+             hover_velocity_weight, HOVER_COMMAND_DEADBAND);
 
     // 第一阶段不使用障碍物代价，暂时停用 ESDF 地图初始化；原代码保留。
 #if 0
@@ -729,15 +779,12 @@ int main(int argc, char **argv) {
     ros::Subscriber vel_sub = nh.subscribe("/" + UAV_NAME + "/mavros/local_position/velocity_local", 10, velocityCallbackWorld);
 
     // 全局轨迹订阅
-    ros::Subscriber global_traj_sub = nh.subscribe<form_nav::GlobalTrajectory>(
-        "/kino_astar/trajectory", 1, globalTrajCallback);
+    ros::Subscriber global_traj_sub = nh.subscribe<form_nav::GlobalTrajectory>("/kino_astar/trajectory", 1, globalTrajCallback);
     ros::Subscriber global_progress_sub;
     if (is_tracked) {
-        global_progress_pub = nh.advertise<form_nav::GlobalPathProgress>(
-            "/formation/global_path_progress", 1);
+        global_progress_pub = nh.advertise<form_nav::GlobalPathProgress>("/formation/global_path_progress", 1);
     } else {
-        global_progress_sub = nh.subscribe<form_nav::GlobalPathProgress>(
-            "/formation/global_path_progress", 1, globalProgressCallback);
+        global_progress_sub = nh.subscribe<form_nav::GlobalPathProgress>("/formation/global_path_progress", 1, globalProgressCallback);
     }
 
     // 动态订阅邻居
@@ -753,7 +800,7 @@ int main(int argc, char **argv) {
 
     // --- 发布（setpoint、速度、共享预测状态、可视化） ---
     local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("/" + UAV_NAME + "/mavros/setpoint_position/local", 10);
-    cmd_vel_pub = nh.advertise<geometry_msgs::Twist>("/" + UAV_NAME + "/mavros/setpoint_velocity/cmd_vel_unstamped", 1);
+    cmd_vel_pub = nh.advertise<geometry_msgs::TwistStamped>("/" + UAV_NAME + "/mavros/setpoint_velocity/cmd_vel", 1);
     share_path_pub = nh.advertise<form_nav::PredictedTrajectory>("/" + UAV_NAME + "/predicted_path_share", 1);
     predicted_path_pub = nh.advertise<std_msgs::Float64MultiArray>("/" + UAV_NAME + "/predicted_path_viz", 1);
     predicted_path_viz_pub = nh.advertise<visualization_msgs::Marker>("/" + UAV_NAME + "/mpc_predicted_path_marker", 10);

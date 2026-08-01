@@ -53,6 +53,10 @@
         <param name="communication/neighbor_future_tolerance"
                value="$(arg neighbor_future_tolerance)" />
         <param name="global_progress/timeout" value="$(arg progress_timeout)" />
+        <param name="terminal_hover/velocity_weight" value="2000.0" />
+        <param name="terminal_hover/yaw_rate_weight" value="200.0" />
+        <param name="terminal_hover/command_deadband" value="0.03" />
+        <param name="terminal_hover/yaw_rate_deadband" value="0.03" />
         <remap from="/sdf_map/cloud" to="/map_generator/global_cloud"/> 
         <remap from="/sdf_map/occupancy_inflate" to="/$(arg uav_id)/sdf_map/occupancy_inflate"/>
         <remap from="/sdf_map/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>

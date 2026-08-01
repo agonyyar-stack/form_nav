@@ -48,7 +48,7 @@ private: //存储了 MPC 算法运行时的配置和状态
     int num; //无人机数量
     
     //权重矩阵
-    DM Q_, F_; 
+    DM Q_, F_, V_hover_;
 
     //运动学方程参数
     double Lx, Kx;
@@ -127,6 +127,10 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setObstacleCriticalDistance(double d) { d_critical_oa = d; }
     /// 设置编队内安全距离 (m)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
+    /// 设置终点悬停时的线速度和偏航角速度权重
+    void setHoverVelocityWeights(double linear_weight, double yaw_weight) {
+        V_hover_ = DM::diag(DM{linear_weight, linear_weight, linear_weight, yaw_weight});
+    }
 
     /// 设置 ESDF CasADi 插值器
     void setEsdf(EsdfCasadi* esdf) { esdf_ptr_ = esdf; }
@@ -146,7 +150,8 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
 
     MX collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& neighbor_params, MX current_states); //编队内碰撞避让项
 
-    bool solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states); //求解优化问题
+    bool solve(double t, const std::vector<UavState>& neighbors,
+               Eigen::VectorXd current_states, bool terminal_hover = false); //求解优化问题
 
     vector<double> getFirstU(); //最优控制序列中的第一个控制量
     vector<double> getPredictX(); //最优状态序列

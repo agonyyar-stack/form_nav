@@ -10,6 +10,7 @@ Mpc::Mpc() {
     //权重矩阵Q,F
     Q_ = DM::diag(DM{20000, 20000, 10000, 100}); //索引之前初始化size
     F_ = DM::diag(DM{100, 100, 100, 100});
+    V_hover_ = DM::diag(DM{2000, 2000, 2000, 200});
     //运动学参数
     Lx = 0.83; Kx = 1;
     Ly = 0.77; Ky = 1;
@@ -308,23 +309,11 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
         H_ca += h_ca;
     }
 
-    // 暂时禁用“与 tracked UAV/参考点避碰”项。单机需要跟踪该参考点，
-    // 将参考点同时作为碰撞对象会在目标位置产生最大碰撞惩罚。
-    // 原实现保留如下，待多机真实领航者模型接入后再恢复：
-#if 0
-    if (has_global_traj_) {
-        MX y_d = reference_state(Slice(0, 3));
-        MX diff = pos_i - y_d;
-        MX dist = MX::norm_2(diff);
-        MX h_ca = Wc *(1.0 / (1.0 + exp(dist - d_safe_ca)));
-        H_ca += h_ca;
-    }
-#endif
-
     return H_ca;
 }
 
-bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states) {
+bool Mpc::solve(double t, const std::vector<UavState>& neighbors,
+                Eigen::VectorXd current_states, bool terminal_hover) {
     // 控制节点负责等待传感器和全局轨迹；这里再做一次尺寸检查，避免
     // 未初始化状态进入 CasADi 参数并产生难以定位的维度错误。
     if (current_states.size() != 8) {
@@ -350,7 +339,13 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
     std::vector<double> reference_values;
     reference_values.reserve(8 * (N_ + 1));
     for (int k = 0; k <= N_; ++k) {
-        const GlobalWaypoint reference = interpolateGlobalTrajectory(t + k * dt_);
+        GlobalWaypoint reference = interpolateGlobalTrajectory(t + k * dt_);
+        if (terminal_hover) {
+            reference.vx = 0.0;
+            reference.vy = 0.0;
+            reference.vz = 0.0;
+            reference.vyaw = 0.0;
+        }
         reference_values.insert(reference_values.end(), {
             reference.x, reference.y, reference.z, reference.yaw,
             reference.vx, reference.vy, reference.vz, reference.vyaw});
@@ -385,14 +380,16 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
         // 第一阶段仅验证全局路径跟踪；暂时停用 ESDF 和编队碰撞代价，原实现保留。
 #if 0
         MX H_oa = esdfObstacleAvoidance(X_k); // 基于ESDF的障碍物避障
-        MX H_ca = collisionAvoidance(reference_k, k, neighbor_params, X_k);
+        cost += H_oa ;
 #endif
+        MX H_ca = collisionAvoidance(reference_k, k, neighbor_params, X_k);
+        cost += H_ca;
 
         if (k < N_) {
             cost += MX::mtimes({S_i1.T(), Q_, S_i1});
 
             // 模式2: 位置+速度跟踪 — 增加速度误差惩罚
-            if (tracking_model_ >= 2 && has_global_traj_) {
+            if ((tracking_model_ >= 2 || terminal_hover) && has_global_traj_) {
                 MX v_ref = reference_k(Slice(4, 8));  // 参考速度 [vx,vy,vz,vyaw]
                 MX v_i = X_k(Slice(4, 8));    // 机体速度
                 MX w_i = X_k(3);
@@ -403,13 +400,9 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                 MX v_world_w = v_i(3);
                 MX v_world = MX::vertcat({v_world_x, v_world_y, v_world_z, v_world_w});
                 MX v_err = v_world - v_ref;
-                cost += MX::mtimes({v_err.T(), F_, v_err});  // 复用 F_ 作为速度跟踪权重
+                const DM& velocity_weight = terminal_hover ? V_hover_ : F_;
+                cost += MX::mtimes({v_err.T(), velocity_weight, v_err});
             }
-
-            // 障碍物/邻机避碰代价在后续阶段恢复。
-#if 0
-            cost += (H_oa + H_ca);
-#endif
 
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k});
@@ -417,7 +410,7 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
             cost += MX::mtimes({S_i1.T(), Q_, S_i1});
 
             // 终端也加速度跟踪 (模式2)
-            if (tracking_model_ >= 2 && has_global_traj_) {
+            if ((tracking_model_ >= 2 || terminal_hover) && has_global_traj_) {
                 MX v_ref = reference_k(Slice(4, 8));
                 MX v_i = X_k(Slice(4, 8));
                 MX w_i = X_k(3);
@@ -427,12 +420,9 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                 MX v_world_w = v_i(3);
                 MX v_world = MX::vertcat({v_world_x, v_world_y, v_world_z, v_world_w});
                 MX v_err = v_world - v_ref;
-                cost += MX::mtimes({v_err.T(), F_, v_err});
+                const DM& velocity_weight = terminal_hover ? V_hover_ : F_;
+                cost += MX::mtimes({v_err.T(), velocity_weight, v_err});
             }
-
-#if 0
-            cost += (H_oa + H_ca);
-#endif
         }
     }
     opti.minimize(cost);
