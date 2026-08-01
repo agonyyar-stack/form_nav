@@ -2,25 +2,25 @@ world_frame: world
 frames:
   "0":
     child_frame: uav0/map
-    origin: [-23.0, 0.0, 0.0]
+    origin: [-23.0, -2.0, 0.0]
     yaw: 0.0
   "1":
     child_frame: uav1/map
-    origin: [-23.0, 2.0, 0.0]
+    origin: [-23.0, 0.0, 0.0]
     yaw: 0.0
   "2":
     child_frame: uav2/map
-    origin: [-23.0, -2.0, 0.0]
+    origin: [-23.0, 2.0, 0.0]
     yaw: 0.0
   "3":
     child_frame: uav3/map
-    origin: [-19.0, 2.0, 0.0]
+    origin: [-21.0, -2.0, 0.0]
     yaw: 0.0
   "4":
     child_frame: uav4/map
-    origin: [-19.0, 0.0, 0.0]
+    origin: [-21.0, 0.0, 0.0]
     yaw: 0.0
   "5":
     child_frame: uav5/map
-    origin: [-19.0, -2.0, 0.0]
+    origin: [-21.0, 2.0, 0.0]
     yaw: 0.0

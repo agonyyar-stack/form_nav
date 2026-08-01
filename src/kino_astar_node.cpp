@@ -51,8 +51,7 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
   }
 
   Eigen::Vector3d end_pt(goal_world.pose.position.x, goal_world.pose.position.y, 1.0);
-  const Eigen::Vector3d planning_uav_world(
-      odom_->pose.pose.position.x, odom_->pose.pose.position.y, odom_->pose.pose.position.z);
+  const Eigen::Vector3d planning_uav_world(odom_->pose.pose.position.x, odom_->pose.pose.position.y, odom_->pose.pose.position.z);
   Eigen::Vector3d start_pt = planning_uav_world - planning_uav_formation_offset;
   Eigen::Vector3d start_vel(odom_->twist.twist.linear.x, odom_->twist.twist.linear.y, odom_->twist.twist.linear.z);
   Eigen::Vector3d end_vel(0, 0, 0);
@@ -163,16 +162,10 @@ int main(int argc, char** argv)
   ros::NodeHandle nh("~");
 
   nh.param<std::string>("world_frame", world_frame, "world");
-  std::vector<double> formation_offset;
-  nh.param<std::vector<double>>("planning_uav_formation_offset", formation_offset,
-                                std::vector<double>{2.0, -2.0, 0.0});
-  if (formation_offset.size() != 3)
-  {
-    ROS_FATAL("planning_uav_formation_offset must contain [x, y, z]");
-    return 1;
-  }
-  planning_uav_formation_offset =
-      Eigen::Vector3d(formation_offset[0], formation_offset[1], formation_offset[2]);
+  const double offset_x = nh.param<double>("planning_uav_formation_offset_x", 1.0);
+  const double offset_y = nh.param<double>("planning_uav_formation_offset_y", 0.0);
+  const double offset_z = nh.param<double>("planning_uav_formation_offset_z", 0.0);
+  planning_uav_formation_offset = Eigen::Vector3d(offset_x, offset_y, offset_z);
   tf_buffer = std::make_unique<tf2_ros::Buffer>();
   tf_listener = std::make_unique<tf2_ros::TransformListener>(*tf_buffer);
 
@@ -181,8 +174,7 @@ int main(int argc, char** argv)
 
   path_marker_pub = nh.advertise<visualization_msgs::Marker>("/kino_astar/path_marker", 10);
   // Latching guarantees that MPC nodes started later receive the active path.
-  path_traj_pub = nh.advertise<form_nav::GlobalTrajectory>(
-      "/kino_astar/trajectory", 1, true);
+  path_traj_pub = nh.advertise<form_nav::GlobalTrajectory>( "/kino_astar/trajectory", 1, true);
   goal_marker_pub = nh.advertise<visualization_msgs::Marker>("/kino_astar/goal_marker", 10);
 
   GridMap::Ptr grid_map = std::make_shared<GridMap>();

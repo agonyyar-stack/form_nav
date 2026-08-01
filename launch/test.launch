@@ -51,7 +51,6 @@
 
     <!-- 全局规划器-->
     <include file="$(find form_nav)/launch/kino_astar_grid.launch">
-        <!-- Preserve the single-UAV test: here the path is the UAV path, not a formation-center path. -->
         <arg name="uav_id" value="uav0" />
         <arg name="formation_offset_x" value="0.0" />
         <arg name="formation_offset_y" value="0.0" />

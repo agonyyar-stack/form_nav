@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="uav_id" default="uav5" />
-  <arg name="formation_offset_x" default="2.0" />
-  <arg name="formation_offset_y" default="-2.0" />
+  <arg name="uav_id" default="uav4" />
+  <arg name="formation_offset_x" default="1.0" />
+  <arg name="formation_offset_y" default="0.0" />
   <arg name="formation_offset_z" default="0.0" />
   <arg name="world_frame" default="world" />
 
@@ -15,7 +15,9 @@
 
   <node name="kino_astar_node" pkg="form_nav" type="kino_astar_node" output="screen">
     <param name="world_frame" value="$(arg world_frame)" />
-    <rosparam param="planning_uav_formation_offset">[$(arg formation_offset_x), $(arg formation_offset_y), $(arg formation_offset_z)]</rosparam>
+    <param name="planning_uav_formation_offset_x" value="$(arg formation_offset_x)" />
+    <param name="planning_uav_formation_offset_y" value="$(arg formation_offset_y)" />
+    <param name="planning_uav_formation_offset_z" value="$(arg formation_offset_z)" />
     <param name="grid_map/resolution" value="0.1" /> <!-- 栅格地图分辨率，单位 m/格 -->
     <param name="grid_map/map_size_x" value="50.0" /> <!-- 地图 X 方向尺寸，单位 m -->
     <param name="grid_map/map_size_y" value="50.0" /> <!-- 地图 Y 方向尺寸，单位 m -->
