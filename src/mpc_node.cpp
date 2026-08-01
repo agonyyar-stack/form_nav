@@ -1,5 +1,6 @@
 #include <ros/ros.h>
 #include <xmlrpcpp/XmlRpcException.h>
+#include <mavros_msgs/State.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
@@ -94,6 +95,20 @@ struct GlobalProgressCache {
 };
 
 GlobalProgressCache global_progress;
+
+// --- 飞控状态 ---
+// mpc_node 只有在飞控已解锁且处于 OFFBOARD 模式后才接管控制；
+// 未就绪时绝不发布任何速度指令，避免中断 uav_base 的位置 setpoint 流
+// （PX4 进入 OFFBOARD / 解锁的前置条件）。
+mavros_msgs::State current_fc_state;
+bool vehicle_ready = false;
+
+// ========== 飞控状态回调 ==========
+void fcStateCallback(const mavros_msgs::State::ConstPtr& msg) {
+    current_fc_state = *msg;
+    vehicle_ready = current_fc_state.armed &&
+                    current_fc_state.mode == "OFFBOARD";
+}
 
 // ========== 全局轨迹回调 ==========
 // 数据格式: 每点 7 个 double [t, x, y, z, vx, vy, vz]
@@ -427,16 +442,29 @@ bool buildAlignedNeighborStates(const ros::Time& prediction_start,
 }
 
 void publishHoldCommand() {
-    geometry_msgs::Twist hold_cmd;
+    geometry_msgs::TwistStamped hold_cmd;
+    hold_cmd.header.stamp = ros::Time::now();
+    hold_cmd.header.frame_id = WORLD_FRAME;
     cmd_vel_pub.publish(hold_cmd);
 }
 
 // ========== 主控制循环 ==========
 void controlLoop(const ros::TimerEvent&, bool is_tracked) {
-    // 传感器或全局参考未准备好时不求解。发布零速度保持连续的
-    // setpoint 流，避免将无效状态解释为有效控制量。
+    // 飞控未就绪（未解锁 / 未进入 OFFBOARD）时不发布任何指令
+    if (!vehicle_ready) {
+        ROS_INFO_THROTTLE(2.0,
+                          "%s: waiting for FC (armed+OFFBOARD) before "
+                          "taking control",
+                          UAV_NAME.c_str());
+        return;
+    }
+
+    // 传感器或全局参考未准备好时不求解、不发布任何指令。
+    // 关键：解锁后、全局轨迹到达前若发布零速度 hold，会覆盖 uav_base 的
+    // 位置 setpoint，使 PX4 保持在地面不起飞，触发
+    // "Disarmed by auto preflight disarming"（解锁后 2 秒内无起飞自动上锁）。
+    // 因此起飞/悬停阶段完全交给 uav_base 的位置 setpoint 兜底。
     if (!has_pose || !has_velocity || !has_yaw || !global_traj_received) {
-        publishHoldCommand();
         return;
     }
 
@@ -471,6 +499,32 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
             return;
         }
         t0 = global_progress.path_time;
+    }
+
+    // ========== 到达终点检测：悬停而非原地振荡 ==========
+    // 每架无人机的停靠目标是"轨迹末端 + 自身编队偏移 M_i"（与 formationError
+    // 中的 virtual center 定义一致），因此用 本机位置 - 自身偏移 去比轨迹末端。
+    // 时间条件用 t0：leader 为自己计算的路径进度，follower 为 leader 广播的进度，
+    // 所有机共享同一条全局轨迹，末端时间一致。
+    {
+        const Eigen::Vector3d virtual_center(
+            current_mpc_state(0) - my_formation_offset(0),
+            current_mpc_state(1) - my_formation_offset(1),
+            current_mpc_state(2) - my_formation_offset(2));
+        const Eigen::Vector3d traj_end(global_traj.back().x,
+                                       global_traj.back().y,
+                                       global_traj.back().z);
+        const double end_dist = (virtual_center - traj_end).norm();
+        const double speed = std::hypot(vel_world_x, vel_world_y);
+        if (t0 >= global_traj.back().t - 0.5 &&
+            end_dist < 0.3 && speed < 0.15) {
+            ROS_INFO_THROTTLE(2.0,
+                              "%s: reached trajectory end (dist=%.2f m, "
+                              "speed=%.2f m/s), holding.",
+                              UAV_NAME.c_str(), end_dist, speed);
+            publishHoldCommand();
+            return;
+        }
     }
 
     // World → Body 速度转换
@@ -528,11 +582,13 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
         double vx = cos_psi * u[0] - sin_psi * u[1];
         double vy = sin_psi * u[0] + cos_psi * u[1];
 
-        geometry_msgs::Twist cmd;
-        cmd.linear.x = vx;
-        cmd.linear.y = vy;
-        cmd.linear.z = u[2];
-        cmd.angular.z = u[3];
+        geometry_msgs::TwistStamped cmd;
+        cmd.header.stamp = ros::Time::now();
+        cmd.header.frame_id = WORLD_FRAME;
+        cmd.twist.linear.x = vx;
+        cmd.twist.linear.y = vy;
+        cmd.twist.linear.z = u[2];
+        cmd.twist.angular.z = u[3];
         cmd_vel_pub.publish(cmd);
 
         std::vector<double> pred = mpc_ptr->getPredictX();
@@ -724,7 +780,9 @@ int main(int argc, char **argv) {
     mpc_ptr->setEsdf(&esdf_casadi);
 #endif
 
-    // --- 订阅（位置、速度、姿态、邻居预测状态） --- 
+    // --- 订阅（飞控状态、位置、速度、邻居预测状态） --- 
+    ros::Subscriber fc_state_sub = nh.subscribe<mavros_msgs::State>(
+        "/" + UAV_NAME + "/mavros/state", 10, fcStateCallback);
     ros::Subscriber pose_sub = nh.subscribe("/" + UAV_NAME + "/mavros/local_position/pose", 10, poseCallback);
     ros::Subscriber vel_sub = nh.subscribe("/" + UAV_NAME + "/mavros/local_position/velocity_local", 10, velocityCallbackWorld);
 
@@ -753,7 +811,7 @@ int main(int argc, char **argv) {
 
     // --- 发布（setpoint、速度、共享预测状态、可视化） ---
     local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("/" + UAV_NAME + "/mavros/setpoint_position/local", 10);
-    cmd_vel_pub = nh.advertise<geometry_msgs::Twist>("/" + UAV_NAME + "/mavros/setpoint_velocity/cmd_vel_unstamped", 1);
+    cmd_vel_pub = nh.advertise<geometry_msgs::TwistStamped>("/" + UAV_NAME + "/mavros/setpoint_velocity/cmd_vel", 1);
     share_path_pub = nh.advertise<form_nav::PredictedTrajectory>("/" + UAV_NAME + "/predicted_path_share", 1);
     predicted_path_pub = nh.advertise<std_msgs::Float64MultiArray>("/" + UAV_NAME + "/predicted_path_viz", 1);
     predicted_path_viz_pub = nh.advertise<visualization_msgs::Marker>("/" + UAV_NAME + "/mpc_predicted_path_marker", 10);

@@ -145,11 +145,16 @@ public:
         current_state = *msg;
     }
 
-    // 速度指令回调：收到第一个速度指令后停止发布位置 setpoint
+    // 速度指令回调：仅在无人机已解锁(armed)后，收到第一个速度指令才停止发布位置 setpoint。
+    // 解锁前必须持续发布位置 setpoint（PX4 进入 OFFBOARD 的前置条件），
+    // 否则 mpc_node 未就绪时发出的零速度指令会提前中断 setpoint 流，导致无法解锁起飞。
     void velocity_cb(const geometry_msgs::TwistStamped::ConstPtr& msg) {
+        if (!current_state.armed) {
+            return;
+        }
         if (!velocity_cmd_received) {
             velocity_cmd_received = true;
-            ROS_INFO("收到第一个速度指令,停止发布位置 setpoint,切换为速度控制");
+            ROS_INFO("已解锁,收到第一个速度指令,停止发布位置 setpoint,切换为速度控制");
         }
     }
 
