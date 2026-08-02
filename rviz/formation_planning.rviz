@@ -6,14 +6,8 @@ Panels:
       Expanded:
         - /Global Options1
         - /kinoA*1/kinoA*_path_nodes1
-        - /UAV01/Recorded_Path1
-        - /UAV01/MPC1
         - /UAV01/MPC1/mpc_trajectory1
-        - /UAV11/Recorded_Path1
-        - /UAV21/Recorded_Path1
-        - /UAV31/Recorded_Path1
-        - /UAV41/Recorded_Path1
-        - /UAV51/Recorded_Path1
+        - /UAV21/MPC1/mpc_trajectory1
       Splitter Ratio: 0.5024154782295227
     Tree Height: 627
   - Class: rviz/Selection
@@ -73,7 +67,7 @@ Visualization Manager:
       Marker Topic: /kino_astar/goal_marker
       Name: GoalPoint
       Namespaces:
-        kino_astar/goal: true
+        {}
       Queue Size: 100
       Value: true
     - Alpha: 1
@@ -139,7 +133,7 @@ Visualization Manager:
           Marker Topic: /kino_astar/path_marker
           Name: kinoA*_path_marker
           Namespaces:
-            kino_astar/path: true
+            {}
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
@@ -147,7 +141,7 @@ Visualization Manager:
           Marker Topic: /kino_astar_node/kino_astar_path_nodes
           Name: kinoA*_path_nodes
           Namespaces:
-            "": true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
@@ -229,8 +223,7 @@ Visualization Manager:
               Marker Topic: /uav0/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                mpc_predict_points: true
-                mpc_predicted_path: true
+                {}
               Queue Size: 100
               Value: true
           Enabled: true
@@ -311,11 +304,10 @@ Visualization Manager:
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav1/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                mpc_predict_points: true
-                mpc_predicted_path: true
+                {}
               Queue Size: 100
               Value: true
           Enabled: true
@@ -396,11 +388,10 @@ Visualization Manager:
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav2/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                mpc_predict_points: true
-                mpc_predicted_path: true
+                {}
               Queue Size: 100
               Value: true
           Enabled: true
@@ -481,11 +472,10 @@ Visualization Manager:
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav3/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                mpc_predict_points: true
-                mpc_predicted_path: true
+                {}
               Queue Size: 100
               Value: true
           Enabled: true
@@ -566,11 +556,10 @@ Visualization Manager:
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav4/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                mpc_predict_points: true
-                mpc_predicted_path: true
+                {}
               Queue Size: 100
               Value: true
           Enabled: true
@@ -651,11 +640,10 @@ Visualization Manager:
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav5/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                mpc_predict_points: true
-                mpc_predicted_path: true
+                {}
               Queue Size: 100
               Value: true
           Enabled: true
