@@ -1,10 +1,5 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="world" default="$(find form_nav)/worlds/pure_empty.world" />
-  <arg name="gui" default="false" />
-  <arg name="debug" default="false" />
-  <arg name="verbose" default="false" />
-  <arg name="paused" default="false" />
   <arg name="rviz" default="true" />
   <arg name="world_frame" default="world" />
   <arg name="formation_config_file"
@@ -15,11 +10,6 @@
   <arg name="progress_timeout" default="0.3" />
 
   <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">
-    <arg name="world" value="$(arg world)" />
-    <arg name="gui" value="$(arg gui)" />
-    <arg name="debug" value="$(arg debug)" />
-    <arg name="verbose" value="$(arg verbose)" />
-    <arg name="paused" value="$(arg paused)" />
   </include>
 
   <rosparam command="load" file="$(arg formation_config_file)"
