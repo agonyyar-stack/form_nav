@@ -96,10 +96,10 @@ struct GlobalProgressCache {
 
 GlobalProgressCache global_progress;
 
-// 到达终点后的悬停锁定标志：一旦置位就持续保持悬停，不再回到 MPC 求解，
-// 避免在终点阈值附近悬停/振荡反复切换。收到新的全局轨迹时解除锁定，
-// 允许重新规划后再次起飞。
-bool arrived_hold_ = false;
+// // 到达终点后的悬停锁定标志：一旦置位就持续保持悬停，不再回到 MPC 求解，
+// // 避免在终点阈值附近悬停/振荡反复切换。收到新的全局轨迹时解除锁定，
+// // 允许重新规划后再次起飞。
+// bool arrived_hold_ = false;
 
 // --- 飞控状态 ---
 // mpc_node 只有在飞控已解锁且处于 OFFBOARD 模式后才接管控制；
@@ -160,8 +160,8 @@ void globalTrajCallback(const form_nav::GlobalTrajectory::ConstPtr& msg) {
     last_global_idx = 0;
     global_progress = GlobalProgressCache{};
     neighbor_trajectories.clear();
-    // 新轨迹意味着新的任务：解除到达悬停锁定，允许再次起飞。
-    arrived_hold_ = false;
+    // // 新轨迹意味着新的任务：解除到达悬停锁定，允许再次起飞。
+    // arrived_hold_ = false;
     mpc_ptr->setGlobalTrajectory(global_traj);
     ROS_INFO("%s: received global trajectory %u with %zu waypoints",
              UAV_NAME.c_str(), current_trajectory_id, global_traj.size());
@@ -455,25 +455,25 @@ void publishHoldCommand() {
     cmd_vel_pub.publish(hold_cmd);
 }
 
-// 悬停/锁定期间发布"原地静止"的预测轨迹，避免邻居因为收不到本机
-// 预测轨迹而进入 missing trajectory 等待状态，导致整个编队连锁卡死。
-void publishStationaryPrediction(const ros::Time& stamp) {
-    form_nav::PredictedTrajectory msg;
-    msg.header.stamp = stamp;
-    msg.header.frame_id = WORLD_FRAME;
-    msg.uav_id = MY_ID;
-    msg.dt = MPC_DT;
-    msg.steps = MPC_HORIZON + 1;
-    msg.states.reserve(static_cast<size_t>(msg.steps) * 8);
-    for (uint32_t i = 0; i < msg.steps; ++i) {
-        // 世界系位置/航向保持当前值，速度全 0（世界速度，符合共享轨迹约定）。
-        msg.states.insert(msg.states.end(), {
-            current_mpc_state(0), current_mpc_state(1),
-            current_mpc_state(2), current_mpc_state(3),
-            0.0, 0.0, 0.0, 0.0});
-    }
-    share_path_pub.publish(msg);
-}
+// // 悬停/锁定期间发布"原地静止"的预测轨迹，避免邻居因为收不到本机
+// // 预测轨迹而进入 missing trajectory 等待状态，导致整个编队连锁卡死。
+// void publishStationaryPrediction(const ros::Time& stamp) {
+//     form_nav::PredictedTrajectory msg;
+//     msg.header.stamp = stamp;
+//     msg.header.frame_id = WORLD_FRAME;
+//     msg.uav_id = MY_ID;
+//     msg.dt = MPC_DT;
+//     msg.steps = MPC_HORIZON + 1;
+//     msg.states.reserve(static_cast<size_t>(msg.steps) * 8);
+//     for (uint32_t i = 0; i < msg.steps; ++i) {
+//         // 世界系位置/航向保持当前值，速度全 0（世界速度，符合共享轨迹约定）。
+//         msg.states.insert(msg.states.end(), {
+//             current_mpc_state(0), current_mpc_state(1),
+//             current_mpc_state(2), current_mpc_state(3),
+//             0.0, 0.0, 0.0, 0.0});
+//     }
+//     share_path_pub.publish(msg);
+// }
 
 // ========== 主控制循环 ==========
 void controlLoop(const ros::TimerEvent&, bool is_tracked) {
@@ -528,37 +528,37 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
         t0 = global_progress.path_time;
     }
 
-    // ========== 到达终点检测：锁定悬停，避免原地振荡 ==========
-    // 每架无人机的停靠目标是"轨迹末端 + 自身编队偏移 M_i"（与 formationError
-    // 中的 virtual center 定义一致），因此用 本机位置 - 自身偏移 去比轨迹末端。
-    // 一旦满足条件即锁定（arrived_hold_），之后持续悬停不再回 MPC 求解，
-    // 避免在阈值附近悬停/振荡反复切换；收到新轨迹时由 globalTrajCallback 解锁。
-    if (arrived_hold_) {
-        publishHoldCommand();
-        publishStationaryPrediction(solve_stamp);
-        return;
-    }
-    {
-        const Eigen::Vector3d virtual_center(
-            current_mpc_state(0) - my_formation_offset(0),
-            current_mpc_state(1) - my_formation_offset(1),
-            current_mpc_state(2) - my_formation_offset(2));
-        const Eigen::Vector3d traj_end(global_traj.back().x,
-                                       global_traj.back().y,
-                                       global_traj.back().z);
-        const double end_dist = (virtual_center - traj_end).norm();
-        const double speed = std::hypot(vel_world_x, vel_world_y);
-        if (t0 >= global_traj.back().t - 0.5 &&
-            end_dist < 0.3 && speed < 0.15) {
-            arrived_hold_ = true;
-            ROS_INFO("%s: reached trajectory end (dist=%.2f m, speed=%.2f m/s), "
-                     "locking hold.",
-                     UAV_NAME.c_str(), end_dist, speed);
-            publishHoldCommand();
-            publishStationaryPrediction(solve_stamp);
-            return;
-        }
-    }
+    // // ========== 到达终点检测：锁定悬停，避免原地振荡 ==========
+    // // 每架无人机的停靠目标是"轨迹末端 + 自身编队偏移 M_i"（与 formationError
+    // // 中的 virtual center 定义一致），因此用 本机位置 - 自身偏移 去比轨迹末端。
+    // // 一旦满足条件即锁定（arrived_hold_），之后持续悬停不再回 MPC 求解，
+    // // 避免在阈值附近悬停/振荡反复切换；收到新轨迹时由 globalTrajCallback 解锁。
+    // if (arrived_hold_) {
+    //     publishHoldCommand();
+    //     publishStationaryPrediction(solve_stamp);
+    //     return;
+    // }
+    // {
+    //     const Eigen::Vector3d virtual_center(
+    //         current_mpc_state(0) - my_formation_offset(0),
+    //         current_mpc_state(1) - my_formation_offset(1),
+    //         current_mpc_state(2) - my_formation_offset(2));
+    //     const Eigen::Vector3d traj_end(global_traj.back().x,
+    //                                    global_traj.back().y,
+    //                                    global_traj.back().z);
+    //     const double end_dist = (virtual_center - traj_end).norm();
+    //     const double speed = std::hypot(vel_world_x, vel_world_y);
+    //     if (t0 >= global_traj.back().t - 0.5 &&
+    //         end_dist < 0.3 && speed < 0.15) {
+    //         arrived_hold_ = true;
+    //         ROS_INFO("%s: reached trajectory end (dist=%.2f m, speed=%.2f m/s), "
+    //                  "locking hold.",
+    //                  UAV_NAME.c_str(), end_dist, speed);
+    //         publishHoldCommand();
+    //         publishStationaryPrediction(solve_stamp);
+    //         return;
+    //     }
+    // }
 
     // World → Body 速度转换
     double yaw = current_mpc_state(3);
