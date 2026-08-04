@@ -13,7 +13,7 @@
     <param name="output_topic" value="/$(arg uav_id)/mavros/local_position/odom_world" />
   </node>
 
-  <node name="kino_astar_node" pkg="form_nav" type="kino_astar_node" output="screen">
+  <node name="$(arg uav_id)_kino_astar_node" pkg="form_nav" type="kino_astar_node" output="screen">
     <param name="world_frame" value="$(arg world_frame)" />
     <param name="planning_uav_formation_offset_x" value="$(arg formation_offset_x)" />
     <param name="planning_uav_formation_offset_y" value="$(arg formation_offset_y)" />

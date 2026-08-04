@@ -12,6 +12,40 @@
   <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">
   </include>
 
+  <node pkg="form_nav" type="random_obs" name="random_obs" output="screen" >
+    <param name="pattern" value="1" /> <!-- 1=静态(默认), 2=动态, 3=静+动 -->
+
+    <param name="map/x_size"     value="40.0" /> <!-- 地图的x轴大小 -->
+    <param name="map/y_size"     value="40.0" /> <!-- 地图的y轴大小 -->
+    <param name="map/z_size"     value="3" /> <!-- 地图的z轴大小 -->
+    <param name="map/resolution" value="0.1"/> <!-- 地图的分辨率为空间分辨率 -->
+
+    <param name="map/obs_num"             value="60"/> <!-- 障碍物的数量 -->
+    <param name="ObstacleShape/lower_rad" value="0.5"/> <!-- 障碍物的最小半径 -->
+    <param name="ObstacleShape/upper_rad" value="1.0"/> <!-- 障碍物的最大半径 -->
+    <param name="ObstacleShape/lower_hei" value="0.0"/> <!-- 障碍物的最小高度 -->
+    <param name="ObstacleShape/upper_hei" value="3.0"/> <!-- 障碍物的最大高度 -->
+
+    <param name="map/circle_num"         value="60"/> <!-- 圆形障碍物的数量 -->
+    <param name="ObstacleShape/radius_l" value="0.7"/> <!-- 圆形障碍物的最小半径 -->
+    <param name="ObstacleShape/radius_h" value="0.5"/> <!-- 圆形障碍物的最大半径 -->
+    <param name="ObstacleShape/z_l"      value="0.7"/> <!-- 圆形障碍物的最小高度 -->
+    <param name="ObstacleShape/z_h"      value="0.8"/> <!-- 圆形障碍物的最大高度 -->
+    <param name="ObstacleShape/theta"    value="0.5"/> <!-- 圆形障碍物的旋转角度 -->
+
+    <param name="min_distance" value="1.2"/> <!-- 障碍物最小间距 -->
+
+    <param name="dyn_obs/num"      value="20" />
+    <param name="dyn_obs/size"     value="0.8" />  <!-- 底面边长 -->
+    <param name="dyn_obs/height"   value="2.0" />  <!-- 高度 -->
+    <param name="dyn_obs/speed_l"  value="0.5" /> <!-- 速度范围 -->
+    <param name="dyn_obs/speed_h"  value="2.0" />
+    <param name="dyn_obs/period_l" value="3.0" /> <!-- 周期范围 -->
+    <param name="dyn_obs/period_h" value="8.0" />
+    <param name="dyn_obs/radius_l" value="1.5" />  <!-- 轨迹半径范围 -->
+    <param name="dyn_obs/radius_h" value="5.0" />
+  </node>
+
   <rosparam command="load" file="$(arg formation_config_file)"
             ns="$(arg formation_config_namespace)" />
 
@@ -57,6 +91,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
+    <arg name="tracking_model" value="2" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav1" />
@@ -68,6 +103,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
+    <arg name="tracking_model" value="2" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav2" />
@@ -79,6 +115,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
+    <arg name="tracking_model" value="2" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav3" />
@@ -90,6 +127,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
+    <arg name="tracking_model" value="2" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav4" />
@@ -101,6 +139,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
+    <arg name="tracking_model" value="2" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav5" />
@@ -112,5 +151,6 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
+    <arg name="tracking_model" value="2" />
   </include>
 </launch>

@@ -308,19 +308,6 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
         H_ca += h_ca;
     }
 
-    // 暂时禁用“与 tracked UAV/参考点避碰”项。单机需要跟踪该参考点，
-    // 将参考点同时作为碰撞对象会在目标位置产生最大碰撞惩罚。
-    // 原实现保留如下，待多机真实领航者模型接入后再恢复：
-#if 0
-    if (has_global_traj_) {
-        MX y_d = reference_state(Slice(0, 3));
-        MX diff = pos_i - y_d;
-        MX dist = MX::norm_2(diff);
-        MX h_ca = Wc *(1.0 / (1.0 + exp(dist - d_safe_ca)));
-        H_ca += h_ca;
-    }
-#endif
-
     return H_ca;
 }
 
