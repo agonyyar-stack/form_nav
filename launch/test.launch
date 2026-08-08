@@ -42,7 +42,7 @@
     </node>
 
     <!-- rviz -->
-    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find form_nav)/rviz/kinoA*_mpc.rviz" />
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find form_nav)/rviz/kinoAstar_mpc.rviz" />
 
     <!-- 切换模式，解锁 -->
     <include file="$(find form_nav)/launch/uav_base.launch" >
