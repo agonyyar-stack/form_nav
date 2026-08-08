@@ -91,7 +91,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
-    <arg name="tracking_model" value="2" />
+    <arg name="tracking_model" value="1" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav1" />
@@ -103,7 +103,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
-    <arg name="tracking_model" value="2" />
+    <arg name="tracking_model" value="1" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav2" />
@@ -115,7 +115,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
-    <arg name="tracking_model" value="2" />
+    <arg name="tracking_model" value="1" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav3" />
@@ -127,7 +127,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
-    <arg name="tracking_model" value="2" />
+    <arg name="tracking_model" value="1" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav4" />
@@ -139,7 +139,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
-    <arg name="tracking_model" value="2" />
+    <arg name="tracking_model" value="1" />
   </include>
   <include file="$(find form_nav)/launch/mpc_esdf.launch">
     <arg name="uav_id" value="uav5" />
@@ -151,6 +151,6 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
     <arg name="progress_timeout" value="$(arg progress_timeout)" />
-    <arg name="tracking_model" value="2" />
+    <arg name="tracking_model" value="1" />
   </include>
 </launch>

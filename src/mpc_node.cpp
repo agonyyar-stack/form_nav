@@ -96,10 +96,14 @@ struct GlobalProgressCache {
 
 GlobalProgressCache global_progress;
 
-// // 到达终点后的悬停锁定标志：一旦置位就持续保持悬停，不再回到 MPC 求解，
-// // 避免在终点阈值附近悬停/振荡反复切换。收到新的全局轨迹时解除锁定，
-// // 允许重新规划后再次起飞。
-// bool arrived_hold_ = false;
+// 到达终点后的悬停锁定标志：一旦置位就持续保持悬停，不再回到 MPC 求解，
+// 避免在终点阈值附近悬停/振荡反复切换。收到新的全局轨迹时解除锁定，
+// 允许重新规划后再次起飞。
+bool arrived_hold_ = false;
+
+// 到达终点缓冲区（m）：无人机路径进度进入末端 0.5 s 后，按剩余终点距离
+// 线性缩放指令速度，弥补短预测时域下 MPC 无法提前规划刹车的不足。
+double DOCKING_DISTANCE = 1.5;
 
 // --- 飞控状态 ---
 // mpc_node 只有在飞控已解锁且处于 OFFBOARD 模式后才接管控制；
@@ -160,8 +164,8 @@ void globalTrajCallback(const form_nav::GlobalTrajectory::ConstPtr& msg) {
     last_global_idx = 0;
     global_progress = GlobalProgressCache{};
     neighbor_trajectories.clear();
-    // // 新轨迹意味着新的任务：解除到达悬停锁定，允许再次起飞。
-    // arrived_hold_ = false;
+    // 新轨迹意味着新的任务：解除到达悬停锁定，允许再次起飞。
+    arrived_hold_ = false;
     mpc_ptr->setGlobalTrajectory(global_traj);
     ROS_INFO("%s: received global trajectory %u with %zu waypoints",
              UAV_NAME.c_str(), current_trajectory_id, global_traj.size());
@@ -455,25 +459,49 @@ void publishHoldCommand() {
     cmd_vel_pub.publish(hold_cmd);
 }
 
-// // 悬停/锁定期间发布"原地静止"的预测轨迹，避免邻居因为收不到本机
-// // 预测轨迹而进入 missing trajectory 等待状态，导致整个编队连锁卡死。
-// void publishStationaryPrediction(const ros::Time& stamp) {
-//     form_nav::PredictedTrajectory msg;
-//     msg.header.stamp = stamp;
-//     msg.header.frame_id = WORLD_FRAME;
-//     msg.uav_id = MY_ID;
-//     msg.dt = MPC_DT;
-//     msg.steps = MPC_HORIZON + 1;
-//     msg.states.reserve(static_cast<size_t>(msg.steps) * 8);
-//     for (uint32_t i = 0; i < msg.steps; ++i) {
-//         // 世界系位置/航向保持当前值，速度全 0（世界速度，符合共享轨迹约定）。
-//         msg.states.insert(msg.states.end(), {
-//             current_mpc_state(0), current_mpc_state(1),
-//             current_mpc_state(2), current_mpc_state(3),
-//             0.0, 0.0, 0.0, 0.0});
-//     }
-//     share_path_pub.publish(msg);
-// }
+// 锁定悬停期间发布终点位置 setpoint（世界系转 local 系），由 PX4 位置
+// 控制器锁定位置，避免纯零速度指令下的缓慢漂移。若 TF 变换失败则退回
+// 零速度 hold，保证 OFFBOARD 控制源不断流。
+void publishHoldPositionSetpoint(const ros::Time& stamp) {
+    geometry_msgs::PoseStamped hold_pose;
+    hold_pose.header.stamp = stamp;
+    hold_pose.header.frame_id = WORLD_FRAME;
+    hold_pose.pose.position.x = global_traj.back().x + my_formation_offset(0);
+    hold_pose.pose.position.y = global_traj.back().y + my_formation_offset(1);
+    hold_pose.pose.position.z = global_traj.back().z + my_formation_offset(2);
+    tf2::Quaternion hold_yaw;
+    hold_yaw.setRPY(0.0, 0.0, current_mpc_state(3));
+    hold_pose.pose.orientation = tf2::toMsg(hold_yaw);
+    try {
+        const geometry_msgs::PoseStamped local_pose = tf_buffer_ptr->transform(
+            hold_pose, LOCAL_FRAME, ros::Duration(0.05));
+        local_pos_pub.publish(local_pose);
+    } catch (const tf2::TransformException& error) {
+        ROS_WARN_THROTTLE(1.0, "%s: hold pose transform to %s failed: %s",
+                          UAV_NAME.c_str(), LOCAL_FRAME.c_str(), error.what());
+        publishHoldCommand();
+    }
+}
+
+// 悬停/锁定期间发布"原地静止"的预测轨迹，避免邻居因为收不到本机
+// 预测轨迹而进入 missing trajectory 等待状态，导致整个编队连锁卡死。
+void publishStationaryPrediction(const ros::Time& stamp) {
+    form_nav::PredictedTrajectory msg;
+    msg.header.stamp = stamp;
+    msg.header.frame_id = WORLD_FRAME;
+    msg.uav_id = MY_ID;
+    msg.dt = MPC_DT;
+    msg.steps = MPC_HORIZON + 1;
+    msg.states.reserve(static_cast<size_t>(msg.steps) * 8);
+    for (uint32_t i = 0; i < msg.steps; ++i) {
+        // 世界系位置/航向保持当前值，速度全 0（世界速度，符合共享轨迹约定）。
+        msg.states.insert(msg.states.end(), {
+            current_mpc_state(0), current_mpc_state(1),
+            current_mpc_state(2), current_mpc_state(3),
+            0.0, 0.0, 0.0, 0.0});
+    }
+    share_path_pub.publish(msg);
+}
 
 // ========== 主控制循环 ==========
 void controlLoop(const ros::TimerEvent&, bool is_tracked) {
@@ -528,37 +556,37 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
         t0 = global_progress.path_time;
     }
 
-    // // ========== 到达终点检测：锁定悬停，避免原地振荡 ==========
-    // // 每架无人机的停靠目标是"轨迹末端 + 自身编队偏移 M_i"（与 formationError
-    // // 中的 virtual center 定义一致），因此用 本机位置 - 自身偏移 去比轨迹末端。
-    // // 一旦满足条件即锁定（arrived_hold_），之后持续悬停不再回 MPC 求解，
-    // // 避免在阈值附近悬停/振荡反复切换；收到新轨迹时由 globalTrajCallback 解锁。
-    // if (arrived_hold_) {
-    //     publishHoldCommand();
-    //     publishStationaryPrediction(solve_stamp);
-    //     return;
-    // }
-    // {
-    //     const Eigen::Vector3d virtual_center(
-    //         current_mpc_state(0) - my_formation_offset(0),
-    //         current_mpc_state(1) - my_formation_offset(1),
-    //         current_mpc_state(2) - my_formation_offset(2));
-    //     const Eigen::Vector3d traj_end(global_traj.back().x,
-    //                                    global_traj.back().y,
-    //                                    global_traj.back().z);
-    //     const double end_dist = (virtual_center - traj_end).norm();
-    //     const double speed = std::hypot(vel_world_x, vel_world_y);
-    //     if (t0 >= global_traj.back().t - 0.5 &&
-    //         end_dist < 0.3 && speed < 0.15) {
-    //         arrived_hold_ = true;
-    //         ROS_INFO("%s: reached trajectory end (dist=%.2f m, speed=%.2f m/s), "
-    //                  "locking hold.",
-    //                  UAV_NAME.c_str(), end_dist, speed);
-    //         publishHoldCommand();
-    //         publishStationaryPrediction(solve_stamp);
-    //         return;
-    //     }
-    // }
+    // ========== 到达终点检测：锁定悬停，避免原地振荡 ==========
+    // 每架无人机的停靠目标是"轨迹末端 + 自身编队偏移 M_i"（与 formationError
+    // 中的 virtual center 定义一致），因此用 本机位置 - 自身偏移 去比轨迹末端。
+    // 一旦满足条件即锁定（arrived_hold_），之后持续悬停不再回 MPC 求解，
+    // 避免在阈值附近悬停/振荡反复切换；收到新轨迹时由 globalTrajCallback 解锁。
+    // 终点距离/速度在这里提前计算，既用于锁定判定，也供末端减速使用。
+    const Eigen::Vector3d virtual_center(
+        current_mpc_state(0) - my_formation_offset(0),
+        current_mpc_state(1) - my_formation_offset(1),
+        current_mpc_state(2) - my_formation_offset(2));
+    const Eigen::Vector3d traj_end(global_traj.back().x,
+                                   global_traj.back().y,
+                                   global_traj.back().z);
+    const double end_dist = (virtual_center - traj_end).norm();
+    const double speed = std::hypot(vel_world_x, vel_world_y);
+
+    if (arrived_hold_) {
+        publishHoldPositionSetpoint(solve_stamp);
+        publishStationaryPrediction(solve_stamp);
+        return;
+    }
+    if (t0 >= global_traj.back().t - 0.5 &&
+        end_dist < 0.5 && speed < 0.3) {
+        arrived_hold_ = true;
+        ROS_INFO("%s: reached trajectory end (dist=%.2f m, speed=%.2f m/s), "
+                 "locking hold.",
+                 UAV_NAME.c_str(), end_dist, speed);
+        publishHoldPositionSetpoint(solve_stamp);
+        publishStationaryPrediction(solve_stamp);
+        return;
+    }
 
     // World → Body 速度转换
     double yaw = current_mpc_state(3);
@@ -615,13 +643,30 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
         double vx = cos_psi * u[0] - sin_psi * u[1];
         double vy = sin_psi * u[0] + cos_psi * u[1];
 
+        // 末端减速：路径进度进入末端 0.5 s 后，按剩余终点距离线性缩放
+        // 指令速度，保证接近终点时速度单调下降，避免 MPC 反复冲过头。
+        // 注意：缩放只作用于实际指令，共享预测轨迹仍是 MPC 原始解；
+        // 第一阶段无邻居不影响，编队阶段若保留需再校验一致性。
+        double dock_s = 1.0;
+        if (t0 >= global_traj.back().t - 0.5) {
+            dock_s = std::clamp(end_dist / DOCKING_DISTANCE, 0.05, 1.0);
+            ROS_INFO_THROTTLE(1.0,
+                              "%s: docking end_dist=%.2f m, dock_s=%.2f, "
+                              "speed=%.2f m/s",
+                              UAV_NAME.c_str(), end_dist, dock_s, speed);
+        }
+        vx *= dock_s;
+        vy *= dock_s;
+        const double vz = u[2] * dock_s;
+        const double vw = u[3] * dock_s;
+
         geometry_msgs::TwistStamped cmd;
         cmd.header.stamp = ros::Time::now();
         cmd.header.frame_id = WORLD_FRAME;
         cmd.twist.linear.x = vx;
         cmd.twist.linear.y = vy;
-        cmd.twist.linear.z = u[2];
-        cmd.twist.angular.z = u[3];
+        cmd.twist.linear.z = vz;
+        cmd.twist.angular.z = vw;
         cmd_vel_pub.publish(cmd);
 
         std::vector<double> pred = mpc_ptr->getPredictX();
@@ -746,6 +791,14 @@ int main(int argc, char **argv) {
         "communication/neighbor_future_tolerance", 0.05);
     double progress_timeout = nh_private.param<double>(
         "global_progress/timeout", 0.3);
+    double w_vel = nh_private.param<double>("mpc/w_vel", 300.0);
+    double w_terminal_vel = nh_private.param<double>(
+        "mpc/w_terminal_vel", 2000.0);
+    double w_du = nh_private.param<double>("mpc/w_du", 100.0);
+    double terminal_pos_scale = nh_private.param<double>(
+        "mpc/terminal_pos_scale", 0.2);
+    double docking_distance = nh_private.param<double>(
+        "mpc/docking_distance", 1.5);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
         throw std::runtime_error(
             "communication/neighbor_trajectory_timeout must be positive");
@@ -758,10 +811,20 @@ int main(int argc, char **argv) {
     if (!std::isfinite(progress_timeout) || progress_timeout <= 0.0) {
         throw std::runtime_error("global_progress/timeout must be positive");
     }
+    if (!std::isfinite(docking_distance) || docking_distance <= 0.0) {
+        throw std::runtime_error("mpc/docking_distance must be positive");
+    }
+    if (!std::isfinite(w_du) || w_du < 0.0) {
+        throw std::runtime_error("mpc/w_du must be non-negative");
+    }
+    if (!std::isfinite(terminal_pos_scale) || terminal_pos_scale < 0.0) {
+        throw std::runtime_error("mpc/terminal_pos_scale must be non-negative");
+    }
 
     MY_ID = my_id;
     MPC_HORIZON = N;
     MPC_DT = dt;
+    DOCKING_DISTANCE = docking_distance;
     NEIGHBOR_TRAJECTORY_TIMEOUT = neighbor_timeout;
     NEIGHBOR_FUTURE_TOLERANCE = neighbor_future_tolerance;
     GLOBAL_PROGRESS_TIMEOUT = progress_timeout;
@@ -798,6 +861,14 @@ int main(int argc, char **argv) {
     mpc_ptr->setObstacleSafeDistance(d_safe_oa);
     mpc_ptr->setObstacleCriticalDistance(d_crit_oa);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
+    mpc_ptr->setVelocityTrackWeight(
+        DM::diag(DM{w_vel, w_vel, w_vel, w_vel / 4.0}));
+    mpc_ptr->setTerminalVelocityWeight(
+        DM::diag(DM{w_terminal_vel, w_terminal_vel, w_terminal_vel,
+                    w_terminal_vel / 4.0}));
+    mpc_ptr->setControlIncrementWeight(
+        DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
+    mpc_ptr->setTerminalPositionScale(terminal_pos_scale);
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
              "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f, "

@@ -9,7 +9,11 @@ Mpc::Mpc() {
     w_min_ = - w_max_;
     //权重矩阵Q,F
     Q_ = DM::diag(DM{20000, 20000, 10000, 100}); //索引之前初始化size
-    F_ = DM::diag(DM{100, 100, 100, 100});
+    F_ = DM::diag(DM{100, 100, 100, 100});       // 控制输入惩罚
+    V_ = DM::diag(DM{300, 300, 300, 75});        // 中间步速度跟踪权重（过大易放大参考速度折线波动）
+    W_v_ = DM::diag(DM{2000, 2000, 2000, 500});  // 终端速度惩罚权重（终点刹车归零）
+    Q_term_ = 0.2 * Q_;                          // 终端位置权重（弱化终点"冲刺"）
+    R_d_ = DM::diag(DM{100, 100, 100, 25});      // 控制增量惩罚（抑制重规划导致的指令抖动）
     //运动学参数
     Lx = 0.83; Kx = 1;
     Ly = 0.77; Ky = 1;
@@ -390,7 +394,7 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                 MX v_world_w = v_i(3);
                 MX v_world = MX::vertcat({v_world_x, v_world_y, v_world_z, v_world_w});
                 MX v_err = v_world - v_ref;
-                cost += MX::mtimes({v_err.T(), F_, v_err});  // 复用 F_ 作为速度跟踪权重
+                cost += MX::mtimes({v_err.T(), V_, v_err});  // 中间步速度跟踪权重
             }
 
             // 障碍物/邻机避碰代价在后续阶段恢复。
@@ -401,10 +405,11 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k});
         } else {
-            cost += MX::mtimes({S_i1.T(), Q_, S_i1});
+            cost += MX::mtimes({S_i1.T(), Q_term_, S_i1});
 
-            // 终端也加速度跟踪 (模式2)
-            if (tracking_model_ >= 2 && has_global_traj_) {
+            // 终端速度惩罚：迫使预测末端速度归零，避免到达终点后仍持续
+            // 给运动指令导致原地振荡。对所有跟踪模式生效。
+            if (has_global_traj_) {
                 MX v_ref = reference_k(Slice(4, 8));
                 MX v_i = X_k(Slice(4, 8));
                 MX w_i = X_k(3);
@@ -414,13 +419,19 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                 MX v_world_w = v_i(3);
                 MX v_world = MX::vertcat({v_world_x, v_world_y, v_world_z, v_world_w});
                 MX v_err = v_world - v_ref;
-                cost += MX::mtimes({v_err.T(), F_, v_err});
+                cost += MX::mtimes({v_err.T(), W_v_, v_err});
             }
 
 #if 0
             cost += (H_oa + H_ca);
 #endif
         }
+    }
+
+    // 控制增量惩罚：抑制重规划导致的指令抖动，平滑预测轨迹。
+    for (int k = 0; k < N_ - 1; ++k) {
+        MX dU = U(all, k + 1) - U(all, k);
+        cost += MX::mtimes({dU.T(), R_d_, dU});
     }
     opti.minimize(cost);
     

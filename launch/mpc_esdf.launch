@@ -49,6 +49,11 @@
         <param name="mpc/d_safe_oa" value="0.6" />       <!-- 障碍物安全距离 (m) -->
         <param name="mpc/d_critical_oa" value="0.3" />   <!-- 障碍物临界距离 (m) -->
         <param name="mpc/d_safe_ca" value="0.3" />       <!-- 编队内安全距离 (m) -->
+        <param name="mpc/w_vel" value="150.0" />            <!-- 中间步速度跟踪权重（过大易沿程振荡） -->
+        <param name="mpc/w_terminal_vel" value="2000.0" />   <!-- 终端速度惩罚权重（终点刹车） -->
+        <param name="mpc/w_du" value="100.0" />             <!-- 控制增量惩罚（抑制指令抖动） -->
+        <param name="mpc/terminal_pos_scale" value="0.2" />  <!-- 终端位置权重缩放（减小终点冲刺） -->
+        <param name="mpc/docking_distance" value="1.5" />    <!-- 末端减速缓冲区 (m) -->
         <param name="communication/neighbor_trajectory_timeout"
                value="$(arg neighbor_trajectory_timeout)" />
         <param name="communication/neighbor_future_tolerance"

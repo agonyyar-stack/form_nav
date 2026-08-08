@@ -130,19 +130,19 @@ Visualization Manager:
           Use rainbow: true
           Value: false
         - Class: rviz/Marker
-          Enabled: false
+          Enabled: true
           Marker Topic: /kino_astar/path_marker
           Name: kinoA*_path_marker
           Namespaces:
             {}
           Queue Size: 100
-          Value: false
+          Value: true
         - Class: rviz/Marker
           Enabled: true
           Marker Topic: /uav0_kino_astar_node/kino_astar_path_nodes
           Name: kinoA*_path_nodes
           Namespaces:
-            "": true
+            {}
           Queue Size: 100
           Value: true
       Enabled: true
@@ -224,7 +224,8 @@ Visualization Manager:
               Marker Topic: /uav0/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -308,7 +309,8 @@ Visualization Manager:
               Marker Topic: /uav1/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -392,7 +394,8 @@ Visualization Manager:
               Marker Topic: /uav2/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -476,7 +479,8 @@ Visualization Manager:
               Marker Topic: /uav3/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -560,7 +564,8 @@ Visualization Manager:
               Marker Topic: /uav4/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -644,7 +649,8 @@ Visualization Manager:
               Marker Topic: /uav5/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -656,7 +662,7 @@ Visualization Manager:
       Marker Topic: /uav1_kino_astar_node/kino_astar_path_nodes
       Name: kinoA*_path_nodes
       Namespaces:
-        "": true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/Marker
@@ -664,7 +670,7 @@ Visualization Manager:
       Marker Topic: /uav2_kino_astar_node/kino_astar_path_nodes
       Name: kinoA*_path_nodes
       Namespaces:
-        "": true
+        {}
       Queue Size: 100
       Value: true
   Enabled: true
@@ -703,17 +709,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -10.728446960449219
-        Y: 1.3388466835021973
-        Z: -8.90168285369873
+        X: -6.523797512054443
+        Y: -0.7547261714935303
+        Z: -9.266424179077148
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.2497966289520264
+      Pitch: 1.329796552658081
       Target Frame: <Fixed Frame>
-      Yaw: 4.798569679260254
+      Yaw: 4.663569450378418
     Saved: ~
 Window Geometry:
   Displays:

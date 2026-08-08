@@ -48,7 +48,7 @@ private: //存储了 MPC 算法运行时的配置和状态
     int num; //无人机数量
     
     //权重矩阵
-    DM Q_, F_; 
+    DM Q_, Q_term_, F_, V_, W_v_, R_d_; 
 
     //运动学方程参数
     double Lx, Kx;
@@ -127,6 +127,14 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setObstacleCriticalDistance(double d) { d_critical_oa = d; }
     /// 设置编队内安全距离 (m)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
+    /// 设置中间步速度跟踪权重 (对角矩阵)
+    void setVelocityTrackWeight(const DM& w) { V_ = w; }
+    /// 设置终端速度惩罚权重 (对角矩阵)
+    void setTerminalVelocityWeight(const DM& w) { W_v_ = w; }
+    /// 设置终端位置权重缩放系数（相对 Q_，默认 0.2，减小终点"冲刺"）
+    void setTerminalPositionScale(double s) { Q_term_ = s * Q_; }
+    /// 设置控制增量惩罚权重 (对角矩阵)
+    void setControlIncrementWeight(const DM& w) { R_d_ = w; }
 
     /// 设置 ESDF CasADi 插值器
     void setEsdf(EsdfCasadi* esdf) { esdf_ptr_ = esdf; }
