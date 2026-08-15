@@ -49,16 +49,32 @@
         <param name="mpc/d_safe_oa" value="0.6" />       <!-- 障碍物安全距离 (m) -->
         <param name="mpc/d_critical_oa" value="0.3" />   <!-- 障碍物临界距离 (m) -->
         <param name="mpc/d_safe_ca" value="0.3" />       <!-- 编队内安全距离 (m) -->
+        <param name="mpc/w_ca" value="1000.0" />          <!-- 相互碰撞惩罚权重 -->
+        <param name="mpc/nearest_obs_num" value="3" />    <!-- 每步查询最近障碍点数量 -->
+        <param name="mpc/drone_radius" value="0.3" />     <!-- 无人机半径 (m) -->
+        <param name="mpc/w_oa" value="30000.0" />         <!-- 障碍物避障权重 -->
+        <param name="mpc/obs_floor" value="0.05" />       <!-- 势垒下限：参考点贴障碍时的最小保持距离 -->
+        <param name="mpc/obs_beta" value="8.0" />         <!-- softplus 势垒系数（32 过陡易迭代超限） -->
+        <param name="mpc/replan_max_iter" value="0" />    <!-- 最近点重查询重规划次数（查询点固定为参考，默认 0） -->
+        <param name="mpc/kd_tree_voxel_size" value="0.1" /> <!-- 建树前体素降采样 (m) -->
+        <param name="mpc/kd_tree_update_interval" value="2.0" /> <!-- 建树最小间隔 (s) -->
+        <param name="mpc/ipopt_max_iter" value="100" />   <!-- IPOPT 最大迭代次数 -->
+        <param name="mpc/ipopt_tol" value="1e-6" />       <!-- IPOPT 收敛容差 -->
+        <param name="mpc/obs_velocity_term" value="false" /> <!-- 障碍物代价速度方向项（有全局路径引导时可关） -->
+        <param name="mpc/hold_dist" value="0.15" />       <!-- 近距紧急悬停阈值 (m) -->
+
         <param name="mpc/w_vel" value="150.0" />            <!-- 中间步速度跟踪权重（过大易沿程振荡） -->
         <param name="mpc/w_terminal_vel" value="2000.0" />   <!-- 终端速度惩罚权重（终点刹车） -->
+
         <param name="mpc/w_du" value="100.0" />             <!-- 控制增量惩罚（抑制指令抖动） -->
-        <param name="mpc/terminal_pos_scale" value="0.2" />  <!-- 终端位置权重缩放（减小终点冲刺） -->
+        <param name="mpc/terminal_pos_scale" value="1.0" />  <!-- 终端位置权重缩放（减小终点冲刺） -->
         <param name="mpc/docking_distance" value="1.5" />    <!-- 末端减速缓冲区 (m) -->
         <param name="communication/neighbor_trajectory_timeout"
                value="$(arg neighbor_trajectory_timeout)" />
         <param name="communication/neighbor_future_tolerance"
                value="$(arg neighbor_future_tolerance)" />
         <param name="global_progress/timeout" value="$(arg progress_timeout)" />
+        <param name="cloud_topic" value="/map_generator/global_cloud" />
         <remap from="/sdf_map/cloud" to="/map_generator/global_cloud"/> 
         <remap from="/sdf_map/occupancy_inflate" to="/$(arg uav_id)/sdf_map/occupancy_inflate"/>
         <remap from="/sdf_map/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>

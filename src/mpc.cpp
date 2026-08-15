@@ -1,5 +1,7 @@
 #include "form_nav/mpc.h" //引入 Mpc 类的声明
+#include "form_nav/kd_tree_map.h"
 #include <algorithm>
+#include <cmath>
 Mpc::Mpc() { 
     N_ = 10; //预测步数
     dt_ = 0.05; //时间步长
@@ -30,6 +32,27 @@ Mpc::Mpc() {
     d_critical_oa = 0.3;   // 临界距离 (m), 低于此距离急剧惩罚
     Wo = 50000;            // 障碍物避障权重 (标量)
     esdf_ptr_ = nullptr;   // ESDF 插值器指针，由外部设置
+    // KD-tree 静态避障参数（第三步）
+    kd_tree_ptr_ = nullptr;   // 障碍物 KD-tree 指针，由外部设置
+    nearest_obs_num_ = 3;     // 每个预测步查询的最近障碍点数量
+    drone_radius_ = 0.35;     // 无人机半径 (m)
+    beta_ = 8.0;              // softplus 势垒系数（实测 8 比 32 更容易收敛）
+    obs_floor_ = 0.05;        // 势垒下限（m）
+    replan_max_iter_ = 2;     // 最近点重查询重规划最大迭代次数
+    use_obstacle_velocity_term_ = true; // 速度方向项默认开启
+    ipopt_max_iter_ = 100;    // IPOPT 最大迭代次数
+    ipopt_tol_ = 1e-6;        // IPOPT 收敛容差
+    // Opti 复用相关
+    has_last_solution_ = false;
+    built_N_ = -1;
+    built_dt_ = -1.0;
+    built_u_max_ = -1.0;
+    built_w_max_ = -1.0;
+    built_tracking_model_ = -1;
+    built_neighbor_count_ = 0;
+    built_nearest_obs_num_ = -1;
+    built_ipopt_max_iter_ = -1;
+    built_ipopt_tol_ = -1.0;
     //碰撞参数
     d_safe_ca = 0.3; //编队内安全距离
     Wc = 1000; //相互碰撞权重
@@ -296,6 +319,104 @@ MX Mpc::esdfObstacleAvoidance(MX current_states) {
     return H_oa;
 }
 
+MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX reference_k, MX obstacle_k) {
+    MX H_oa = MX(0.0);
+    if (kd_tree_ptr_ == nullptr || kd_tree_ptr_->empty()) {
+        // 无 KD-tree 数据时返回零惩罚（与 ESDF 缺数据时行为一致）
+        return H_oa;
+    }
+
+    MX pos = current_states(Slice(0, 3));       // 世界系位置
+    MX yaw = current_states(3);
+    MX v_body = current_states(Slice(4, 7));    // 机体系速度 [vx, vy, vz]
+    // 机体速度 -> 世界速度（速度方向项需要世界系）
+    MX v_world = MX::vertcat({
+        cos(yaw) * v_body(0) - sin(yaw) * v_body(1),
+        sin(yaw) * v_body(0) + cos(yaw) * v_body(1),
+        v_body(2)});
+
+    // 期望物理位置 = 全局参考点 + 自身编队偏移（障碍查询与势垒阈值都以此为准）
+    MX offset_mx = MX(0.0);
+    auto off_it = formation_offsets_.find(my_id_);
+    if (off_it != formation_offsets_.end() && off_it->second.size() >= 3) {
+        offset_mx = MX::vertcat({
+            off_it->second[0], off_it->second[1], off_it->second[2]});
+    }
+    MX ref_pos = reference_k(Slice(0, 3)) + offset_mx;
+
+    // 势垒阈值：参考点在当前最近障碍点处的距离（扣除机体半径），低于下限时
+    // 取下限。这样沿全局路径（参考点即期望位置）势垒为零代价零梯度，MPC 保持
+    // 平滑；只有预测轨迹比参考点更贴近障碍（或参考点本身压进障碍）时才排斥。
+    MX o0 = obstacle_k(Slice(0, 3));
+    MX d_ref = MX::norm_2(ref_pos - o0) - drone_radius_;
+    MX thr = MX::fmax(d_ref, obs_floor_);
+
+    for (int m = 0; m < nearest_obs_num_; ++m) {
+        MX o = obstacle_k(Slice(3 * m, 3 * m + 3));
+        MX d_pred = MX::norm_2(pos - o) - drone_radius_;
+        // 二次斜坡势垒（C1）：d_pred < thr 时以 (excess)^2 排斥，边界处值与
+        // 梯度都连续，避免 fmax 线性斜坡在激活边界处把 IPOPT 步长计算搞挂；
+        // 边界外（excess<=0）严格为零代价零梯度，不与跟踪代价沿路径对抗。
+        MX excess = thr - d_pred;
+        MX relu = MX::fmax(0.0, excess);
+        MX term = Wo * relu * relu;
+        if (use_obstacle_velocity_term_) {
+            // 速度方向项（可选）：沿障碍方向的速度分量，用 sqrt(dot^2+eps)
+            // 光滑化避免 |·| 在 0 处不可导。默认关闭（有全局路径引导时不需要）。
+            MX dir = (o - pos) / (MX::norm_2(o - pos) + 1e-6);
+            MX v_dot_dir = MX::dot(v_world, dir);
+            MX v_toward = MX::sqrt(v_dot_dir * v_dot_dir + 1e-6);
+            term *= v_toward;
+        }
+        H_oa += term;
+    }
+    return H_oa;
+}
+
+std::vector<double> Mpc::queryObstacleValues(
+    const std::vector<Eigen::Vector3d>& query_pts,
+    std::vector<int>& out_indices) {
+    const int steps = static_cast<int>(query_pts.size());
+    const int total = nearest_obs_num_ * steps;
+    std::vector<double> values(3 * total, 1e4);
+    out_indices.assign(total, -1);
+    last_obstacle_pts_.clear();
+    last_obstacle_pts_.reserve(total);
+
+    if (kd_tree_ptr_ == nullptr || kd_tree_ptr_->empty()) {
+        // 无数据：全部填充远处点，代价近似为 0
+        for (int i = 0; i < total; ++i) {
+            last_obstacle_pts_.push_back(Eigen::Vector3d(1e4, 1e4, 1e4));
+        }
+        return values;
+    }
+
+    for (int k = 0; k < steps; ++k) {
+        std::vector<Eigen::Vector3d> pts;
+        std::vector<double> dists;
+        std::vector<int> idx;
+        kd_tree_ptr_->queryNearest(query_pts[k], nearest_obs_num_, pts, dists, idx);
+        for (int m = 0; m < nearest_obs_num_; ++m) {
+            const size_t off = (static_cast<size_t>(k) * nearest_obs_num_ + m) * 3;
+            if (m < static_cast<int>(pts.size())) {
+                values[off + 0] = pts[m].x();
+                values[off + 1] = pts[m].y();
+                values[off + 2] = pts[m].z();
+                out_indices[k * nearest_obs_num_ + m] = idx[m];
+                last_obstacle_pts_.push_back(pts[m]);
+            } else {
+                // 点数不足：填充远处点，代价近似 0
+                values[off + 0] = 1e4;
+                values[off + 1] = 1e4;
+                values[off + 2] = 1e4;
+                out_indices[k * nearest_obs_num_ + m] = -1;
+                last_obstacle_pts_.push_back(Eigen::Vector3d(1e4, 1e4, 1e4));
+            }
+        }
+    }
+    return values;
+}
+
 MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& neighbor_params, MX current_states){
     MX pos_i = current_states(Slice(0, 3));
     MX H_ca = 0.0;
@@ -315,69 +436,58 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
     return H_ca;
 }
 
-bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states) {
-    // 控制节点负责等待传感器和全局轨迹；这里再做一次尺寸检查，避免
-    // 未初始化状态进入 CasADi 参数并产生难以定位的维度错误。
-    if (current_states.size() != 8) {
-        std::cerr << "[MPC] Invalid current state dimension: "
-                  << current_states.size() << std::endl;
-        return false;
+// 构建（或复用）Opti 优化问题。配置（预测时域、时间步、输入限幅、跟踪模式、
+// 邻居数量、最近障碍点数量）变化时重建；否则复用同一实例，仅更新参数值。
+// 复用 + 热启动是第三步重规划循环能够在 20 Hz 控制率下运行的前提。
+bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
+    if (opti_ &&
+        built_N_ == N_ && std::abs(built_dt_ - dt_) < 1e-9 &&
+        std::abs(built_u_max_ - u_max_) < 1e-9 &&
+        std::abs(built_w_max_ - w_max_) < 1e-9 &&
+        built_tracking_model_ == tracking_model_ &&
+        built_neighbor_count_ == neighbors.size() &&
+        built_nearest_obs_num_ == nearest_obs_num_ &&
+        built_ipopt_max_iter_ == ipopt_max_iter_ &&
+        std::abs(built_ipopt_tol_ - ipopt_tol_) < 1e-12) {
+        return true;
     }
-    if (!has_global_traj_) {
-        std::cerr << "[MPC] Cannot solve without a global trajectory." << std::endl;
-        return false;
-    }
-    
-    Opti opti = Opti(); //创建优化问题实例
 
+    opti_ = std::make_unique<Opti>();
     Slice all; //切片工具，代表所有索引
 
-    X = opti.variable(8, N_ + 1); //状态序列，位姿速度
-    U = opti.variable(4, N_); //控制序列,速度指令(机体坐标系)
+    X = opti_->variable(8, N_ + 1); //状态序列，位姿速度
+    U = opti_->variable(4, N_); //控制序列,速度指令(机体坐标系)
 
-    // 从最近路径点时间开始，对预测时域进行数值线性插值。参考轨迹只是
-    // 优化参数，不参与决策，因此无需把插值器嵌入 CasADi 符号图。
-    MX reference_param = opti.parameter(8, N_ + 1);
-    std::vector<double> reference_values;
-    reference_values.reserve(8 * (N_ + 1));
-    for (int k = 0; k <= N_; ++k) {
-        const GlobalWaypoint reference = interpolateGlobalTrajectory(t + k * dt_);
-        reference_values.insert(reference_values.end(), {
-            reference.x, reference.y, reference.z, reference.yaw,
-            reference.vx, reference.vy, reference.vz, reference.vyaw});
-    }
-    opti.set_value(reference_param,
-                   casadi::DM::reshape(DM(reference_values), 8, N_ + 1));
+    // 参数：参考轨迹、当前状态、最近障碍点（KD-tree 查询在求解器外完成）
+    reference_param_ = opti_->parameter(8, N_ + 1);
+    X_cur_param_ = opti_->parameter(8, 1);
+    obstacle_param_ = opti_->parameter(3 * nearest_obs_num_, N_ + 1);
 
-    // 初始状态参数
-    MX X_cur_param = opti.parameter(8, 1); //当前状态
-    // 先转换为DM格式因为 casadi 的 set_value 需要 DM 类型
-    vector<double> cur_state_vec(current_states.data(), current_states.data() + 8); //迭代器:将矩阵中的所有元素按顺序放入
-    opti.set_value(X_cur_param, DM(cur_state_vec)); 
-
-    // 邻居轨迹参数处理
-    std::map<int, MX> neighbor_params;
+    // 邻居轨迹参数
+    neighbor_params_.clear();
     for (const auto& nb : neighbors) {
-        MX nb_p = opti.parameter(8, N_ + 1);
-        std::vector<double> nb_vec(nb.predicted_states.data(), nb.predicted_states.data() + nb.predicted_states.size());
-        // Eigen 默认列优先，CasADi 也是列优先填充
-        opti.set_value(nb_p, casadi::DM::reshape(DM(nb_vec), 8, N_ + 1));
-        neighbor_params[nb.id] = nb_p;
+        neighbor_params_[nb.id] = opti_->parameter(8, N_ + 1);
     }
 
-    //构建代价函数
+    // 构建代价函数
     MX cost = 0;
     for (int k = 0; k <= N_; ++k) { // N+1
         MX X_k = X(all, k);
-        MX reference_k = reference_param(all, k);
+        MX reference_k = reference_param_(all, k);
 
-        ErrorTerms errors1 = formationError(k, reference_k, neighbor_params, X_k);
+        ErrorTerms errors1 = formationError(k, reference_k, neighbor_params_, X_k);
         MX S_i1 = errors1.S1;
-        // 第一阶段仅验证全局路径跟踪；暂时停用 ESDF 和编队碰撞代价，原实现保留。
 #if 0
-        MX H_oa = esdfObstacleAvoidance(X_k); // 基于ESDF的障碍物避障
-        MX H_ca = collisionAvoidance(reference_k, k, neighbor_params, X_k);
+        MX H_oa = esdfObstacleAvoidance(X_k); // 基于ESDF的障碍物避障（旧方案，已停用）
+        cost += H_oa;
 #endif
+        MX H_ca = collisionAvoidance(reference_k, k, neighbor_params_, X_k);
+        cost += H_ca;
+
+        // KD-tree 静态避障代价（第三步）：障碍点是参数，代价处处可导
+        MX H_oa_kd = kdtreeObstacleAvoidance(X_k, reference_k,
+                                             obstacle_param_(all, k));
+        cost += H_oa_kd;
 
         if (k < N_) {
             cost += MX::mtimes({S_i1.T(), Q_, S_i1});
@@ -396,12 +506,6 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                 MX v_err = v_world - v_ref;
                 cost += MX::mtimes({v_err.T(), V_, v_err});  // 中间步速度跟踪权重
             }
-
-            // 障碍物/邻机避碰代价在后续阶段恢复。
-#if 0
-            cost += (H_oa + H_ca);
-#endif
-
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k});
         } else {
@@ -421,10 +525,6 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                 MX v_err = v_world - v_ref;
                 cost += MX::mtimes({v_err.T(), W_v_, v_err});
             }
-
-#if 0
-            cost += (H_oa + H_ca);
-#endif
         }
     }
 
@@ -433,56 +533,182 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
         MX dU = U(all, k + 1) - U(all, k);
         cost += MX::mtimes({dU.T(), R_d_, dU});
     }
-    opti.minimize(cost);
-    
+    opti_->minimize(cost);
+
     // 动力学约束
     for (int k = 0; k < N_; ++k) {
         vector<MX> inputs = {X(all, k), U(all, k)}; //U为机体坐标系
         MX x_dot = kinematic_equation_(inputs)[0]; //运动学方程唯一输出
         MX x_next = X(all, k) + x_dot * dt_;
-        opti.subject_to(X(all, k + 1) == x_next);
+        opti_->subject_to(X(all, k + 1) == x_next);
     }
 
-    //初始状态约束
-    opti.subject_to(X(all, 0) == X_cur_param);
+    // 初始状态约束
+    opti_->subject_to(X(all, 0) == X_cur_param_);
 
-    //输入约束
-    opti.subject_to(u_min_ <= U(0, all) <= u_max_);
-    opti.subject_to(u_min_ <= U(1, all) <= u_max_);
-    opti.subject_to(u_min_ <= U(2, all) <= u_max_);
-    opti.subject_to(w_min_ <= U(3, all) <= w_max_);
+    // 输入约束
+    opti_->subject_to(u_min_ <= U(0, all) <= u_max_);
+    opti_->subject_to(u_min_ <= U(1, all) <= u_max_);
+    opti_->subject_to(u_min_ <= U(2, all) <= u_max_);
+    opti_->subject_to(w_min_ <= U(3, all) <= w_max_);
 
-    // // 稳定性约束(仅预测起点，使用 reference_param(all, 0))
-    // MX X_0 = X(all, 0);
-    // MX U_k = U(all, 0);
-    // MX reference_0 = reference_param(all, 0);
-    // ErrorTerms errors2 = formationError(0, reference_0, neighbor_params, X_0);
-    // MX S1 = errors2.S1; 
-    // MX S2 = errors2.S2;
-
-    // MX V_iLMPC_dot = ViLmpcDot(0, reference_0, neighbor_params, X_0, U_k);
-    // MX V_i2_dot = - casadi::MX::mtimes({S1.T(), k1, S1}) - casadi::MX::mtimes({S2.T(), k2, S2});
-
-    // opti.subject_to(V_iLMPC_dot <= V_i2_dot);
-
-    //求解器设置
+    // 求解器设置
     casadi::Dict solver_opts; //创建求解器选项
     solver_opts["expand"] = true; //展开表达式以加快求解速度
-    solver_opts["ipopt.max_iter"] = 100; //最大迭代次数
+    solver_opts["ipopt.max_iter"] = ipopt_max_iter_; //最大迭代次数
     solver_opts["ipopt.print_level"] = 0; //不打印迭代信息
     solver_opts["print_time"] = 0; //不打印时间信息
-    solver_opts["ipopt.acceptable_tol"] = 1e-6; //梯度容差，收敛精度设定
-    solver_opts["ipopt.acceptable_obj_change_tol"] = 1e-6; //目标函数变化容差
+    solver_opts["ipopt.acceptable_tol"] = ipopt_tol_; //梯度容差，收敛精度设定
+    solver_opts["ipopt.acceptable_obj_change_tol"] = ipopt_tol_; //目标函数变化容差
 
-    opti.solver("ipopt", solver_opts); //设置求解器为ipopt并应用求解器选项
-    //std::make_unique<T>(args) 动态分配 T 类型对象，返回 unique_ptr<T>
-    try {
-        solution_ = std::make_unique<casadi::OptiSol>(opti.solve()); 
-        return true;
-    } catch(const std::exception& e) {
-        std::cerr << "Solver failed: " << e.what() << std::endl;
+    opti_->solver("ipopt", solver_opts); //设置求解器为ipopt并应用求解器选项
+
+    // 更新构建签名
+    built_N_ = N_;
+    built_dt_ = dt_;
+    built_u_max_ = u_max_;
+    built_w_max_ = w_max_;
+    built_tracking_model_ = tracking_model_;
+    built_neighbor_count_ = neighbors.size();
+    built_nearest_obs_num_ = nearest_obs_num_;
+    built_ipopt_max_iter_ = ipopt_max_iter_;
+    built_ipopt_tol_ = ipopt_tol_;
+    has_last_solution_ = false;
+    return true;
+}
+
+bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states) {
+    // 控制节点负责等待传感器和全局轨迹；这里再做一次尺寸检查，避免
+    // 未初始化状态进入 CasADi 参数并产生难以定位的维度错误。
+    if (current_states.size() != 8) {
+        std::cerr << "[MPC] Invalid current state dimension: "
+                  << current_states.size() << std::endl;
         return false;
     }
+    if (!has_global_traj_) {
+        std::cerr << "[MPC] Cannot solve without a global trajectory." << std::endl;
+        return false;
+    }
+    if (nearest_obs_num_ <= 0) {
+        std::cerr << "[MPC] nearest_obs_num_ must be positive." << std::endl;
+        return false;
+    }
+
+    if (!buildOpti(neighbors)) {
+        return false;
+    }
+
+    // 从最近路径点时间开始，对预测时域进行数值线性插值。参考轨迹只是
+    // 优化参数，不参与决策，因此无需把插值器嵌入 CasADi 符号图。
+    std::vector<double> reference_values;
+    reference_values.reserve(8 * (N_ + 1));
+    for (int k = 0; k <= N_; ++k) {
+        const GlobalWaypoint reference = interpolateGlobalTrajectory(t + k * dt_);
+        reference_values.insert(reference_values.end(), {
+            reference.x, reference.y, reference.z, reference.yaw,
+            reference.vx, reference.vy, reference.vz, reference.vyaw});
+    }
+    opti_->set_value(reference_param_,
+                     casadi::DM::reshape(DM(reference_values), 8, N_ + 1));
+
+    // 初始状态参数
+    vector<double> cur_state_vec(current_states.data(), current_states.data() + 8);
+    opti_->set_value(X_cur_param_, DM(cur_state_vec));
+
+    // 邻居轨迹参数
+    for (const auto& nb : neighbors) {
+        auto it = neighbor_params_.find(nb.id);
+        if (it == neighbor_params_.end()) {
+            std::cerr << "[MPC] Neighbor " << nb.id
+                      << " not in built Opti problem." << std::endl;
+            return false;
+        }
+        std::vector<double> nb_vec(nb.predicted_states.data(),
+                                   nb.predicted_states.data() + nb.predicted_states.size());
+        // Eigen 默认列优先，CasADi 也是列优先填充
+        opti_->set_value(it->second,
+                         casadi::DM::reshape(DM(nb_vec), 8, N_ + 1));
+    }
+
+    // 查询点：固定用"期望物理位置"（全局参考点 + 自身编队偏移），不随上一轮
+    // 解变化。若用上一轮优化轨迹作为查询点，障碍物参数会随解抖动，形成
+    // "查询点→障碍参数→解→查询点"的正反馈，导致轨迹杂乱；参考点缓慢变化，
+    // 障碍参数稳定，MPC 沿全局路径保持平滑，仅在预测轨迹逼近障碍时被排斥。
+    Eigen::Vector3d query_offset = Eigen::Vector3d::Zero();
+    auto off_it = formation_offsets_.find(my_id_);
+    if (off_it != formation_offsets_.end() && off_it->second.size() >= 3) {
+        query_offset = Eigen::Vector3d(off_it->second[0], off_it->second[1],
+                                       off_it->second[2]);
+    }
+    std::vector<Eigen::Vector3d> query_pts(N_ + 1);
+    for (int k = 0; k <= N_; ++k) {
+        const GlobalWaypoint reference = interpolateGlobalTrajectory(t + k * dt_);
+        query_pts[k] = Eigen::Vector3d(reference.x, reference.y, reference.z) +
+                       query_offset;
+    }
+
+    // 最近点重查询重规划循环：查询点固定为参考位置，若因地图更新导致最近点
+    // 索引变化（如后续动态障碍），带新参数重解；静态地图下通常一次求解即可。
+    // 热启动：每轮用上一轮解作为初值，保证 20 Hz 控制率下求解耗时可控。
+    bool solved = false;
+    for (int iter = 0; iter <= replan_max_iter_; ++iter) {
+        std::vector<int> cur_indices;
+        std::vector<double> obstacle_values = queryObstacleValues(query_pts, cur_indices);
+        opti_->set_value(obstacle_param_,
+                         casadi::DM::reshape(DM(obstacle_values),
+                                             3 * nearest_obs_num_, N_ + 1));
+
+        // 热启动（上一轮解）
+        if (has_last_solution_ &&
+            last_pred_x_.rows() == 8 && last_pred_x_.cols() == N_ + 1) {
+            std::vector<double> x0_vec(last_pred_x_.data(),
+                                       last_pred_x_.data() + 8 * (N_ + 1));
+            opti_->set_initial(X, casadi::DM::reshape(DM(x0_vec), 8, N_ + 1));
+            if (last_u_.rows() == 4 && last_u_.cols() == N_) {
+                std::vector<double> u0_vec(last_u_.data(),
+                                           last_u_.data() + 4 * N_);
+                opti_->set_initial(U, casadi::DM::reshape(DM(u0_vec), 4, N_));
+            }
+        }
+
+        try {
+            solution_ = std::make_unique<casadi::OptiSol>(opti_->solve());
+            solved = true;
+        } catch (const std::exception& e) {
+            std::cerr << "Solver failed: " << e.what() << std::endl;
+            return false;
+        }
+
+        // 记录解（热启动 + 下一轮重查询）
+        std::vector<double> xv = solution_->value(X).get_elements();
+        last_pred_x_.resize(8, N_ + 1);
+        std::copy(xv.begin(), xv.end(), last_pred_x_.data());
+        std::vector<double> uv = solution_->value(U).get_elements();
+        last_u_.resize(4, N_);
+        std::copy(uv.begin(), uv.end(), last_u_.data());
+        has_last_solution_ = true;
+
+        if (iter >= replan_max_iter_) {
+            break;
+        }
+
+        // 用相同的参考查询点重新查询，比较最近点索引是否变化（地图更新时
+        // 会变化）；未变化则说明障碍参数与查询一致，无需再规划。
+        std::vector<int> check_indices;
+        std::vector<double> check_values = queryObstacleValues(query_pts, check_indices);
+        (void)check_values;
+        if (check_indices == cur_indices) {
+            break;
+        }
+    }
+
+    // 同步可视化用障碍点：以最后一次求解实际使用的查询点为准
+    std::vector<int> final_indices;
+    std::vector<double> final_values = queryObstacleValues(query_pts, final_indices);
+    (void)final_values;
+    (void)final_indices;
+
+    return solved;
 }
 
 vector<double> Mpc::getFirstU() {

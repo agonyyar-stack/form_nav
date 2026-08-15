@@ -12,6 +12,8 @@
 using namespace std;
 using namespace casadi;
 
+class KdTreeMap; // 前向声明，避免 mpc.h 引入点云/树头文件
+
 struct ErrorTerms {
     MX S1;       // 编队误差
     MX S1_dot;   // 编队误差导数
@@ -76,15 +78,47 @@ private: //存储了 MPC 算法运行时的配置和状态
     double Wo;             // 障碍物避障权重 (标量)
     EsdfCasadi* esdf_ptr_; // 指向 ESDF CasADi 插值器的指针 (外部管理生命周期)
 
+    // KD-tree 静态避障参数（第三步）
+    KdTreeMap* kd_tree_ptr_;   // 指向障碍物 KD-tree 的指针 (外部管理生命周期)
+    int nearest_obs_num_;      // 每个预测步查询的最近障碍点数量 M
+    double drone_radius_;      // 无人机半径 (m)，有效距离 = ||p-o|| - r_drone
+    double beta_;              // softplus 势垒系数 (参考实现取 32，本项目实测默认 8)
+    double obs_floor_;         // 势垒下限：参考点自身比该距离更贴近障碍时按下限施加排斥
+    int replan_max_iter_;      // 最近点重查询重规划的最大迭代次数
+    bool use_obstacle_velocity_term_; // 是否启用速度方向项（论文对比过：关闭后势场径向对称，易局部极小）
+
     // 跟踪模式: 1=仅位置跟踪(默认), 2=位置+速度跟踪
     int tracking_model_;
 
     //碰撞参数
     double d_safe_ca; // 编队内安全距离 COLLISION AVOIDANCE
-    DM Wc;            // 相互碰撞权重
+    double Wc;        // 相互碰撞权重
 
     MX X; //状态变量
     MX U; //控制变量
+
+    // --- Opti 复用（第三步：参数化障碍物点 + 重规划循环） ---
+    std::unique_ptr<casadi::Opti> opti_;        // 优化问题实例，首次 solve 构建后复用
+    MX reference_param_;                        // 全局参考轨迹参数 (8, N_+1)
+    MX X_cur_param_;                            // 当前状态参数 (8, 1)
+    MX obstacle_param_;                         // 最近障碍点参数 (3*M, N_+1)
+    std::map<int, MX> neighbor_params_;         // 邻居预测轨迹参数
+    bool has_last_solution_;                    // 是否已有上一轮解（用于热启动）
+    Eigen::MatrixXd last_pred_x_;               // 上一轮预测状态 (8, N_+1)
+    Eigen::MatrixXd last_u_;                    // 上一轮控制序列 (4, N_)
+    std::vector<Eigen::Vector3d> last_obstacle_pts_; // 最近一次使用的障碍点（可视化用）
+    // 构建签名：配置变化时重建 Opti
+    int built_N_;
+    double built_dt_;
+    double built_u_max_;
+    double built_w_max_;
+    int built_tracking_model_;
+    size_t built_neighbor_count_;
+    int built_nearest_obs_num_;
+    int built_ipopt_max_iter_;
+    int ipopt_max_iter_;  // IPOPT 最大迭代次数（可调，避障势垒陡峭时可加大）
+    double built_ipopt_tol_;
+    double ipopt_tol_;    // IPOPT 收敛容差（可调）
 
     // 反步法控制器增益参数
     DM k1; // ki,1
@@ -125,8 +159,14 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setObstacleSafeDistance(double d) { d_safe_oa = d; }
     /// 设置障碍物临界距离 (m)
     void setObstacleCriticalDistance(double d) { d_critical_oa = d; }
+    /// 设置障碍物避障权重
+    void setObstacleWeight(double w) { Wo = w; }
+    /// 设置势垒下限（参考点贴障碍时的最小保持距离）
+    void setObstacleFloor(double d) { obs_floor_ = d; }
     /// 设置编队内安全距离 (m)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
+    /// 设置相互碰撞惩罚权重
+    void setCollisionWeight(double w) { Wc = w; }
     /// 设置中间步速度跟踪权重 (对角矩阵)
     void setVelocityTrackWeight(const DM& w) { V_ = w; }
     /// 设置终端速度惩罚权重 (对角矩阵)
@@ -138,6 +178,25 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
 
     /// 设置 ESDF CasADi 插值器
     void setEsdf(EsdfCasadi* esdf) { esdf_ptr_ = esdf; }
+
+    /// 设置障碍物 KD-tree（第三步：静态避障）
+    void setKdTree(KdTreeMap* kd_tree) { kd_tree_ptr_ = kd_tree; }
+    /// 设置每个预测步查询的最近障碍点数量 M
+    void setNearestObstacleNum(int num) { nearest_obs_num_ = num; }
+    /// 设置无人机半径 (m)
+    void setDroneRadius(double r) { drone_radius_ = r; }
+    /// 设置 softplus 势垒系数
+    void setObstacleBeta(double beta) { beta_ = beta; }
+    /// 设置最近点重查询重规划的最大迭代次数
+    void setReplanMaxIter(int iter) { replan_max_iter_ = iter; }
+    /// 设置是否启用障碍物代价的速度方向项
+    void setObstacleVelocityTermEnabled(bool enabled) {
+        use_obstacle_velocity_term_ = enabled;
+    }
+    /// 设置 IPOPT 最大迭代次数
+    void setIpoptMaxIter(int iter) { ipopt_max_iter_ = iter; }
+    /// 设置 IPOPT 收敛容差
+    void setIpoptTol(double tol) { ipopt_tol_ = tol; }
 
     /// 设置 kinodynamic A* 输出的全局轨迹
     void setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj);
@@ -152,12 +211,28 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 基于 ESDF 的障碍物避障项 (替代原来的 obstacleAvoidance)
     MX esdfObstacleAvoidance(MX current_states);
 
+    /// 基于 KD-tree 最近障碍点的避障项（障碍点作为参数，不在符号图内查询）
+    MX kdtreeObstacleAvoidance(MX current_states, MX reference_k, MX obstacle_k);
+
     MX collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& neighbor_params, MX current_states); //编队内碰撞避让项
+
+    /// 构建/复用 Opti 优化问题（配置变化时重建）
+    bool buildOpti(const std::vector<UavState>& neighbors);
+
+    /// 对查询点集合查询最近障碍点并填充 obstacle 参数值（含索引，供重规划判断）
+    std::vector<double> queryObstacleValues(
+        const std::vector<Eigen::Vector3d>& query_pts,
+        std::vector<int>& out_indices);
 
     bool solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states); //求解优化问题
 
     vector<double> getFirstU(); //最优控制序列中的第一个控制量
     vector<double> getPredictX(); //最优状态序列
+
+    /// 最近一次求解实际使用的障碍点（可视化用，按步序存放）
+    const std::vector<Eigen::Vector3d>& getLastObstaclePoints() const {
+        return last_obstacle_pts_;
+    }
 };
 
 #endif

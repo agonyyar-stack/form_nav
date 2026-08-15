@@ -8,6 +8,8 @@
 #include <std_msgs/Float64MultiArray.h>
 #include <nav_msgs/Path.h>
 #include <visualization_msgs/Marker.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <pcl_conversions/pcl_conversions.h>
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/transform_listener.h>
@@ -20,6 +22,7 @@
 #include "form_nav/mpc.h"
 #include "form_nav/formation_config.h"
 #include "form_nav/esdf_casadi.h"
+#include "form_nav/kd_tree_map.h"
 #include "form_nav/sdf_map.h"
 #include "form_nav/GlobalPathProgress.h"
 #include "form_nav/GlobalTrajectory.h"
@@ -48,6 +51,8 @@ ros::Publisher share_path_pub;
 ros::Publisher predicted_path_viz_pub;
 ros::Publisher traveled_path_pub;
 ros::Publisher global_progress_pub;
+ros::Publisher queried_obstacles_pub;  // 第三步：最近查询障碍点可视化
+ros::Publisher obstacle_cloud_pub;     // 第三步：KD-tree 中的障碍点云可视化
 
 // --- 状态量 ---
 // 显式初始化，避免首个传感器消息到达前把未定义数据送入求解器。
@@ -80,6 +85,56 @@ std::map<int, NeighborTrajectoryCache> neighbor_trajectories;
 // --- ESDF 地图 + CasADi 插值器 ---
 std::unique_ptr<SDFMap> sdf_map_ptr;
 EsdfCasadi esdf_casadi;
+
+// --- KD-tree 障碍物地图（第三步：静态避障） ---
+std::unique_ptr<KdTreeMap> kd_tree_ptr;
+bool kd_tree_ready = false;
+double kd_tree_voxel_size = 0.1;  // 建树前体素降采样尺寸 (m)
+double kd_tree_update_interval = 2.0;  // KD-tree 重建最小间隔 (s)
+double obstacle_hold_dist = 0.15; // 当前点最近障碍距离低于该值时悬停（紧急刹车）
+
+// ========== 障碍物点云回调（第三步） ==========
+// 仿真阶段订阅 /map_generator/global_cloud（world 系、静态障碍物真值）；
+// 后续接入感知模块时只需换 topic（必要时在回调里做 TF 变换到 WORLD_FRAME）。
+void obstacleCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& msg) {
+    if (msg->header.frame_id != WORLD_FRAME) {
+        ROS_WARN_THROTTLE(2.0, "%s: obstacle cloud frame %s != %s, ignored.",
+                          UAV_NAME.c_str(), msg->header.frame_id.c_str(),
+                          WORLD_FRAME.c_str());
+        return;
+    }
+    pcl::PointCloud<pcl::PointXYZ> cloud;
+    pcl::fromROSMsg(*msg, cloud);
+    if (cloud.empty()) {
+        return;
+    }
+    // 静态点云每帧内容相同：点数未变且未到重建间隔时跳过，避免 10 Hz 下
+    // 反复对十几万点重建树阻塞 MPC 求解线程。
+    static ros::Time last_build = ros::Time(0);
+    static size_t last_cloud_size = 0;
+    const ros::Time now = ros::Time::now();
+    if (cloud.size() == last_cloud_size &&
+        (now - last_build).toSec() < kd_tree_update_interval) {
+        return;
+    }
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_ptr(
+        new pcl::PointCloud<pcl::PointXYZ>(cloud));
+    kd_tree_ptr->setCloud(cloud_ptr, kd_tree_voxel_size);
+    kd_tree_ready = true;
+    last_build = now;
+    last_cloud_size = cloud.size();
+
+    // 障碍点云可视化（限频发布，避免刷屏）
+    static ros::Time last_cloud_viz = ros::Time::now();
+    if ((ros::Time::now() - last_cloud_viz).toSec() > 1.0) {
+        sensor_msgs::PointCloud2 out_msg = *msg;
+        out_msg.header.stamp = ros::Time::now();
+        obstacle_cloud_pub.publish(out_msg);
+        last_cloud_viz = ros::Time::now();
+    }
+    ROS_INFO_THROTTLE(5.0, "%s: KD-tree updated with %zu obstacle points.",
+                      UAV_NAME.c_str(), kd_tree_ptr->size());
+}
 
 // --- 全局轨迹 ---
 std::vector<GlobalWaypoint> global_traj;
@@ -596,6 +651,24 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
     current_mpc_state(6) = vel_world_z;
     current_mpc_state(7) = vel_body_w;
 
+    // 第三步：近距碰撞安全兜底 —— 当前点已进入临界距离时停止求解并悬停，
+    // 避免在代价势垒梯度很大的区间内求解产生异常指令。
+    if (kd_tree_ready) {
+        const Eigen::Vector3d cur_pos(current_mpc_state(0),
+                                      current_mpc_state(1),
+                                      current_mpc_state(2));
+        const double nearest_dist = kd_tree_ptr->nearestDistance(cur_pos);
+        if (nearest_dist < obstacle_hold_dist) {
+            ROS_WARN_THROTTLE(0.5,
+                              "%s: too close to obstacle (%.2f m < %.2f m), "
+                              "holding.",
+                              UAV_NAME.c_str(), nearest_dist, obstacle_hold_dist);
+            publishHoldCommand();
+            publishStationaryPrediction(solve_stamp);
+            return;
+        }
+    }
+
     // Align every required neighbor prediction to this solve's time grid.
     std::vector<UavState> neighbors_vec;
     std::string neighbor_failure;
@@ -759,6 +832,31 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
         traveled_path.header.stamp = ros::Time::now();
         traveled_path.poses.push_back(traveled_pose);
         traveled_path_pub.publish(traveled_path);
+
+        // 第三步：可视化本次求解实际使用的最近障碍点
+        visualization_msgs::Marker obs_marker;
+        obs_marker.header.frame_id = WORLD_FRAME;
+        obs_marker.header.stamp = ros::Time::now();
+        obs_marker.ns = "mpc_queried_obstacles";
+        obs_marker.id = 0;
+        obs_marker.type = visualization_msgs::Marker::SPHERE_LIST;
+        obs_marker.action = visualization_msgs::Marker::ADD;
+        obs_marker.scale.x = 0.15;
+        obs_marker.scale.y = 0.15;
+        obs_marker.scale.z = 0.15;
+        obs_marker.color.a = 0.9;
+        obs_marker.color.r = 1.0;
+        obs_marker.color.g = 0.2;
+        obs_marker.color.b = 0.0;
+        obs_marker.pose.orientation.w = 1.0;
+        for (const Eigen::Vector3d& pt : mpc_ptr->getLastObstaclePoints()) {
+            geometry_msgs::Point p;
+            p.x = pt.x();
+            p.y = pt.y();
+            p.z = pt.z();
+            obs_marker.points.push_back(p);
+        }
+        queried_obstacles_pub.publish(obs_marker);
     } else {
         ROS_WARN_THROTTLE(1.0, "%s:MPC failed, holding.", UAV_NAME.c_str());
         publishHoldCommand();
@@ -775,9 +873,9 @@ int main(int argc, char **argv) {
     // --- 参数读取 ---
     int my_id          = nh_private.param<int>("my_id", 0);
     int tracking_model = nh_private.param<int>("tracking_model", 1);
-    WORLD_FRAME = nh_private.param<std::string>("world_frame", "world");
+    WORLD_FRAME        = nh_private.param<std::string>("world_frame", "world");
     const std::string formation_config_namespace =
-        nh_private.param<std::string>("formation_config_namespace", "/formation_config");
+                         nh_private.param<std::string>("formation_config_namespace", "/formation_config");
     int   N      = nh_private.param<int>("mpc/N", 10);
     double dt    = nh_private.param<double>("mpc/dt", 0.05);
     double u_max = nh_private.param<double>("mpc/u_max", 6.0);
@@ -785,20 +883,31 @@ int main(int argc, char **argv) {
     double d_safe_oa = nh_private.param<double>("mpc/d_safe_oa", 0.6);
     double d_crit_oa = nh_private.param<double>("mpc/d_critical_oa", 0.3);
     double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.3);
-    double neighbor_timeout = nh_private.param<double>(
-        "communication/neighbor_trajectory_timeout", 0.3);
-    double neighbor_future_tolerance = nh_private.param<double>(
-        "communication/neighbor_future_tolerance", 0.05);
-    double progress_timeout = nh_private.param<double>(
-        "global_progress/timeout", 0.3);
-    double w_vel = nh_private.param<double>("mpc/w_vel", 300.0);
-    double w_terminal_vel = nh_private.param<double>(
-        "mpc/w_terminal_vel", 2000.0);
-    double w_du = nh_private.param<double>("mpc/w_du", 100.0);
-    double terminal_pos_scale = nh_private.param<double>(
-        "mpc/terminal_pos_scale", 0.2);
-    double docking_distance = nh_private.param<double>(
-        "mpc/docking_distance", 1.5);
+    double w_ca      = nh_private.param<double>("mpc/w_ca", 1000.0);
+    int nearest_obs_num = nh_private.param<int>("mpc/nearest_obs_num", 3);
+    double drone_radius = nh_private.param<double>("mpc/drone_radius", 0.35);
+    double w_oa         = nh_private.param<double>("mpc/w_oa", 30000.0);
+    double obs_beta     = nh_private.param<double>("mpc/obs_beta", 8.0);
+    double obs_floor    = nh_private.param<double>("mpc/obs_floor", 0.05);
+    int replan_max_iter = nh_private.param<int>("mpc/replan_max_iter", 0);
+    kd_tree_voxel_size  = nh_private.param<double>("mpc/kd_tree_voxel_size", 0.1);
+    kd_tree_update_interval =
+        nh_private.param<double>("mpc/kd_tree_update_interval", 2.0);
+    int ipopt_max_iter  = nh_private.param<int>("mpc/ipopt_max_iter", 100);
+    double ipopt_tol    = nh_private.param<double>("mpc/ipopt_tol", 1e-6);
+    bool obs_velocity_term =
+        nh_private.param<bool>("mpc/obs_velocity_term", false);
+    double hold_dist = nh_private.param<double>("mpc/hold_dist", 0.15);
+    const std::string cloud_topic =
+        nh_private.param<std::string>("cloud_topic", "/map_generator/global_cloud");
+    double neighbor_timeout          = nh_private.param<double>("communication/neighbor_trajectory_timeout", 0.3);
+    double neighbor_future_tolerance = nh_private.param<double>("communication/neighbor_future_tolerance", 0.05);
+    double progress_timeout          = nh_private.param<double>("global_progress/timeout", 0.3);
+    double w_vel                     = nh_private.param<double>("mpc/w_vel", 300.0);
+    double w_terminal_vel            = nh_private.param<double>("mpc/w_terminal_vel", 2000.0);
+    double w_du                      = nh_private.param<double>("mpc/w_du", 100.0);
+    double terminal_pos_scale        = nh_private.param<double>("mpc/terminal_pos_scale", 0.2);
+    double docking_distance          = nh_private.param<double>("mpc/docking_distance", 1.5);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
         throw std::runtime_error(
             "communication/neighbor_trajectory_timeout must be positive");
@@ -817,6 +926,39 @@ int main(int argc, char **argv) {
     if (!std::isfinite(w_du) || w_du < 0.0) {
         throw std::runtime_error("mpc/w_du must be non-negative");
     }
+    if (!std::isfinite(w_ca) || w_ca < 0.0) {
+        throw std::runtime_error("mpc/w_ca must be non-negative");
+    }
+    if (nearest_obs_num <= 0) {
+        throw std::runtime_error("mpc/nearest_obs_num must be positive");
+    }
+    if (!std::isfinite(drone_radius) || drone_radius <= 0.0) {
+        throw std::runtime_error("mpc/drone_radius must be positive");
+    }
+    if (!std::isfinite(w_oa) || w_oa < 0.0) {
+        throw std::runtime_error("mpc/w_oa must be non-negative");
+    }
+    if (!std::isfinite(obs_floor) || obs_floor < 0.0) {
+        throw std::runtime_error("mpc/obs_floor must be non-negative");
+    }
+    if (!std::isfinite(obs_beta) || obs_beta <= 0.0) {
+        throw std::runtime_error("mpc/obs_beta must be positive");
+    }
+    if (replan_max_iter < 0) {
+        throw std::runtime_error("mpc/replan_max_iter must be non-negative");
+    }
+    if (!std::isfinite(kd_tree_update_interval) || kd_tree_update_interval <= 0.0) {
+        throw std::runtime_error("mpc/kd_tree_update_interval must be positive");
+    }
+    if (!std::isfinite(hold_dist) || hold_dist < 0.0) {
+        throw std::runtime_error("mpc/hold_dist must be non-negative");
+    }
+    if (ipopt_max_iter <= 0) {
+        throw std::runtime_error("mpc/ipopt_max_iter must be positive");
+    }
+    if (!std::isfinite(ipopt_tol) || ipopt_tol <= 0.0) {
+        throw std::runtime_error("mpc/ipopt_tol must be positive");
+    }
     if (!std::isfinite(terminal_pos_scale) || terminal_pos_scale < 0.0) {
         throw std::runtime_error("mpc/terminal_pos_scale must be non-negative");
     }
@@ -825,6 +967,7 @@ int main(int argc, char **argv) {
     MPC_HORIZON = N;
     MPC_DT = dt;
     DOCKING_DISTANCE = docking_distance;
+    obstacle_hold_dist = hold_dist;
     NEIGHBOR_TRAJECTORY_TIMEOUT = neighbor_timeout;
     NEIGHBOR_FUTURE_TOLERANCE = neighbor_future_tolerance;
     GLOBAL_PROGRESS_TIMEOUT = progress_timeout;
@@ -860,7 +1003,17 @@ int main(int argc, char **argv) {
     mpc_ptr->setMaxAngularVelocity(w_max);
     mpc_ptr->setObstacleSafeDistance(d_safe_oa);
     mpc_ptr->setObstacleCriticalDistance(d_crit_oa);
+    mpc_ptr->setObstacleWeight(w_oa);
+    mpc_ptr->setObstacleFloor(obs_floor);
+    mpc_ptr->setNearestObstacleNum(nearest_obs_num);
+    mpc_ptr->setDroneRadius(drone_radius);
+    mpc_ptr->setObstacleBeta(obs_beta);
+    mpc_ptr->setReplanMaxIter(replan_max_iter);
+    mpc_ptr->setObstacleVelocityTermEnabled(obs_velocity_term);
+    mpc_ptr->setIpoptMaxIter(ipopt_max_iter);
+    mpc_ptr->setIpoptTol(ipopt_tol);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
+    mpc_ptr->setCollisionWeight(w_ca);
     mpc_ptr->setVelocityTrackWeight(
         DM::diag(DM{w_vel, w_vel, w_vel, w_vel / 4.0}));
     mpc_ptr->setTerminalVelocityWeight(
@@ -871,10 +1024,14 @@ int main(int argc, char **argv) {
     mpc_ptr->setTerminalPositionScale(terminal_pos_scale);
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
-             "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f, "
+             "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f, w_ca=%.2f, "
+             "nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, beta=%.2f, "
+             "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_oa, d_crit_oa, d_safe_ca,
+             d_safe_oa, d_crit_oa, d_safe_ca, w_ca,
+             nearest_obs_num, drone_radius, w_oa, obs_beta, replan_max_iter,
+             ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE);
 
     // 第一阶段不使用障碍物代价，暂时停用 ESDF 地图初始化；原代码保留。
@@ -883,6 +1040,10 @@ int main(int argc, char **argv) {
     sdf_map_ptr->initMap(nh_private); // nh 是公共 NodeHandle，读取 /sdf_map/...
     mpc_ptr->setEsdf(&esdf_casadi);
 #endif
+
+    // 第三步：初始化 KD-tree 障碍物地图（静态避障）
+    kd_tree_ptr.reset(new KdTreeMap());
+    mpc_ptr->setKdTree(kd_tree_ptr.get());
 
     // --- 订阅（飞控状态、位置、速度、邻居预测状态） --- 
     ros::Subscriber fc_state_sub = nh.subscribe<mavros_msgs::State>(
@@ -902,6 +1063,10 @@ int main(int argc, char **argv) {
             "/formation/global_path_progress", 1, globalProgressCallback);
     }
 
+    // 第三步：障碍物点云（仿真阶段为全局真值点云，后续可换感知 local cloud）
+    ros::Subscriber obstacle_cloud_sub = nh.subscribe<sensor_msgs::PointCloud2>(
+        cloud_topic, 10, obstacleCloudCallback);
+
     // 动态订阅邻居
     std::vector<ros::Subscriber> neighbor_subs;
     for (int nid : neighbor_ids) {
@@ -920,12 +1085,16 @@ int main(int argc, char **argv) {
     predicted_path_pub = nh.advertise<std_msgs::Float64MultiArray>("/" + UAV_NAME + "/predicted_path_viz", 1);
     predicted_path_viz_pub = nh.advertise<visualization_msgs::Marker>("/" + UAV_NAME + "/mpc_predicted_path_marker", 10);
     traveled_path_pub = nh.advertise<nav_msgs::Path>("/" + UAV_NAME + "/traveled_path", 10);
+    queried_obstacles_pub = nh.advertise<visualization_msgs::Marker>(
+        "/" + UAV_NAME + "/mpc_queried_obstacles", 10);
+    obstacle_cloud_pub = nh.advertise<sensor_msgs::PointCloud2>(
+        "/" + UAV_NAME + "/obstacle_cloud", 10);
 
     ros::Rate rate(LOOP_RATE);
 
     // 第一阶段不构建 ESDF；后续恢复障碍物代价时再启用延迟初始化逻辑。
-    ROS_INFO("%s: running distributed formation tracking without obstacle cost; "
-             "waiting for %zu required neighbor(s).",
+    ROS_INFO("%s: running distributed formation tracking with KD-tree static "
+             "obstacle avoidance; waiting for %zu required neighbor(s).",
              UAV_NAME.c_str(), required_neighbor_ids.size());
 
     // 定时器
