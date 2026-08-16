@@ -50,7 +50,7 @@ private: //存储了 MPC 算法运行时的配置和状态
     int num; //无人机数量
     
     //权重矩阵
-    DM Q_, Q_term_, F_, V_, W_v_, R_d_; 
+    DM Q_, F_, W_v_, R_d_; 
 
     //运动学方程参数
     double Lx, Kx;
@@ -87,9 +87,6 @@ private: //存储了 MPC 算法运行时的配置和状态
     int replan_max_iter_;      // 最近点重查询重规划的最大迭代次数
     bool use_obstacle_velocity_term_; // 是否启用速度方向项（论文对比过：关闭后势场径向对称，易局部极小）
 
-    // 跟踪模式: 1=仅位置跟踪(默认), 2=位置+速度跟踪
-    int tracking_model_;
-
     //碰撞参数
     double d_safe_ca; // 编队内安全距离 COLLISION AVOIDANCE
     double Wc;        // 相互碰撞权重
@@ -112,7 +109,6 @@ private: //存储了 MPC 算法运行时的配置和状态
     double built_dt_;
     double built_u_max_;
     double built_w_max_;
-    int built_tracking_model_;
     size_t built_neighbor_count_;
     int built_nearest_obs_num_;
     int built_ipopt_max_iter_;
@@ -139,8 +135,6 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
 
     /// 设置自身 ID
     void setMyId(int id) { my_id_ = id; }
-    /// 设置跟踪模式: 1=仅位置, 2=位置+速度
-    void setTrackingModel(int model) { tracking_model_ = model; }
     /// 设置是否直接跟踪全局轨迹
     void setTracked(bool tracked) { is_tracked_ = tracked; }
     /// 设置编队偏移量表
@@ -167,12 +161,8 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
     /// 设置相互碰撞惩罚权重
     void setCollisionWeight(double w) { Wc = w; }
-    /// 设置中间步速度跟踪权重 (对角矩阵)
-    void setVelocityTrackWeight(const DM& w) { V_ = w; }
     /// 设置终端速度惩罚权重 (对角矩阵)
     void setTerminalVelocityWeight(const DM& w) { W_v_ = w; }
-    /// 设置终端位置权重缩放系数（相对 Q_，默认 0.2，减小终点"冲刺"）
-    void setTerminalPositionScale(double s) { Q_term_ = s * Q_; }
     /// 设置控制增量惩罚权重 (对角矩阵)
     void setControlIncrementWeight(const DM& w) { R_d_ = w; }
 

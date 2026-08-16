@@ -12,9 +12,7 @@ Mpc::Mpc() {
     //权重矩阵Q,F
     Q_ = DM::diag(DM{20000, 20000, 10000, 100}); //索引之前初始化size
     F_ = DM::diag(DM{100, 100, 100, 100});       // 控制输入惩罚
-    V_ = DM::diag(DM{300, 300, 300, 75});        // 中间步速度跟踪权重（过大易放大参考速度折线波动）
     W_v_ = DM::diag(DM{2000, 2000, 2000, 500});  // 终端速度惩罚权重（终点刹车归零）
-    Q_term_ = 0.2 * Q_;                          // 终端位置权重（弱化终点"冲刺"）
     R_d_ = DM::diag(DM{100, 100, 100, 25});      // 控制增量惩罚（抑制重规划导致的指令抖动）
     //运动学参数
     Lx = 0.83; Kx = 1;
@@ -48,7 +46,6 @@ Mpc::Mpc() {
     built_dt_ = -1.0;
     built_u_max_ = -1.0;
     built_w_max_ = -1.0;
-    built_tracking_model_ = -1;
     built_neighbor_count_ = 0;
     built_nearest_obs_num_ = -1;
     built_ipopt_max_iter_ = -1;
@@ -61,8 +58,6 @@ Mpc::Mpc() {
     k2 = DM::diag(DM({2, 2, 2, 2}));
     // 全局轨迹初始化
     has_global_traj_ = false;
-    // 跟踪模式: 1=仅位置 (默认)
-    tracking_model_ = 1;
 }
 Mpc::~Mpc() {}
 
@@ -436,7 +431,7 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
     return H_ca;
 }
 
-// 构建（或复用）Opti 优化问题。配置（预测时域、时间步、输入限幅、跟踪模式、
+// 构建（或复用）Opti 优化问题。配置（预测时域、时间步、输入限幅、
 // 邻居数量、最近障碍点数量）变化时重建；否则复用同一实例，仅更新参数值。
 // 复用 + 热启动是第三步重规划循环能够在 20 Hz 控制率下运行的前提。
 bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
@@ -444,7 +439,6 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         built_N_ == N_ && std::abs(built_dt_ - dt_) < 1e-9 &&
         std::abs(built_u_max_ - u_max_) < 1e-9 &&
         std::abs(built_w_max_ - w_max_) < 1e-9 &&
-        built_tracking_model_ == tracking_model_ &&
         built_neighbor_count_ == neighbors.size() &&
         built_nearest_obs_num_ == nearest_obs_num_ &&
         built_ipopt_max_iter_ == ipopt_max_iter_ &&
@@ -492,27 +486,13 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         if (k < N_) {
             cost += MX::mtimes({S_i1.T(), Q_, S_i1});
 
-            // 模式2: 位置+速度跟踪 — 增加速度误差惩罚
-            if (tracking_model_ >= 2 && has_global_traj_) {
-                MX v_ref = reference_k(Slice(4, 8));  // 参考速度 [vx,vy,vz,vyaw]
-                MX v_i = X_k(Slice(4, 8));    // 机体速度
-                MX w_i = X_k(3);
-                // 机体速度 → 世界速度
-                MX v_world_x = cos(w_i)*v_i(0) - sin(w_i)*v_i(1);
-                MX v_world_y = sin(w_i)*v_i(0) + cos(w_i)*v_i(1);
-                MX v_world_z = v_i(2);
-                MX v_world_w = v_i(3);
-                MX v_world = MX::vertcat({v_world_x, v_world_y, v_world_z, v_world_w});
-                MX v_err = v_world - v_ref;
-                cost += MX::mtimes({v_err.T(), V_, v_err});  // 中间步速度跟踪权重
-            }
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k});
         } else {
-            cost += MX::mtimes({S_i1.T(), Q_term_, S_i1});
+            cost += MX::mtimes({S_i1.T(), Q_, S_i1});
 
             // 终端速度惩罚：迫使预测末端速度归零，避免到达终点后仍持续
-            // 给运动指令导致原地振荡。对所有跟踪模式生效。
+            // 给运动指令导致原地振荡。
             if (has_global_traj_) {
                 MX v_ref = reference_k(Slice(4, 8));
                 MX v_i = X_k(Slice(4, 8));
@@ -568,7 +548,6 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     built_dt_ = dt_;
     built_u_max_ = u_max_;
     built_w_max_ = w_max_;
-    built_tracking_model_ = tracking_model_;
     built_neighbor_count_ = neighbors.size();
     built_nearest_obs_num_ = nearest_obs_num_;
     built_ipopt_max_iter_ = ipopt_max_iter_;

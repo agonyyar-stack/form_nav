@@ -8,8 +8,6 @@
     <arg name="neighbor_trajectory_timeout" default="0.3" />
     <arg name="neighbor_future_tolerance" default="0.05" />
     <arg name="progress_timeout" default="0.3" />
-    <arg name="tracking_model" default="1" />
-
     <!-- A multi-UAV parent launch can load this once and pass load_formation_config=false. -->
     <group if="$(arg load_formation_config)">
         <rosparam command="load" file="$(arg formation_config_file)"
@@ -39,10 +37,8 @@
         <param name="world_frame" value="$(arg world_frame)" />
         <param name="local_frame" value="$(arg uav_id)/map" />
         <param name="formation_config_namespace" value="$(arg formation_config_namespace)" />
-        <param name="tracking_model" value="$(arg tracking_model)" />
-
         <!-- MPC 可调参数 -->
-        <param name="mpc/N" value="10" />               <!-- 预测步长 -->
+        <param name="mpc/N" value="20" />               <!-- 预测步长 -->
         <param name="mpc/dt" value="0.05" />             <!-- 时间步长 (s) -->
         <param name="mpc/u_max" value="2.0" />           <!-- 线速度/加速度上限 -->
         <param name="mpc/w_max" value="2.0" />           <!-- 角速度/加速度上限 -->
@@ -62,13 +58,10 @@
         <param name="mpc/ipopt_tol" value="1e-6" />       <!-- IPOPT 收敛容差 -->
         <param name="mpc/obs_velocity_term" value="false" /> <!-- 障碍物代价速度方向项（有全局路径引导时可关） -->
         <param name="mpc/hold_dist" value="0.15" />       <!-- 近距紧急悬停阈值 (m) -->
+        <param name="mpc/w_du" value="100.0" />             <!-- 控制增量惩罚（抑制指令抖动） -->
 
-        <param name="mpc/w_vel" value="150.0" />            <!-- 中间步速度跟踪权重（过大易沿程振荡） -->
         <param name="mpc/w_terminal_vel" value="2000.0" />   <!-- 终端速度惩罚权重（终点刹车） -->
 
-        <param name="mpc/w_du" value="100.0" />             <!-- 控制增量惩罚（抑制指令抖动） -->
-        <param name="mpc/terminal_pos_scale" value="1.0" />  <!-- 终端位置权重缩放（减小终点冲刺） -->
-        <param name="mpc/docking_distance" value="1.5" />    <!-- 末端减速缓冲区 (m) -->
         <param name="communication/neighbor_trajectory_timeout"
                value="$(arg neighbor_trajectory_timeout)" />
         <param name="communication/neighbor_future_tolerance"

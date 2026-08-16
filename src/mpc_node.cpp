@@ -156,10 +156,6 @@ GlobalProgressCache global_progress;
 // 允许重新规划后再次起飞。
 bool arrived_hold_ = false;
 
-// 到达终点缓冲区（m）：无人机路径进度进入末端 0.5 s 后，按剩余终点距离
-// 线性缩放指令速度，弥补短预测时域下 MPC 无法提前规划刹车的不足。
-double DOCKING_DISTANCE = 1.5;
-
 // --- 飞控状态 ---
 // mpc_node 只有在飞控已解锁且处于 OFFBOARD 模式后才接管控制；
 // 未就绪时绝不发布任何速度指令，避免中断 uav_base 的位置 setpoint 流
@@ -616,7 +612,7 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
     // 中的 virtual center 定义一致），因此用 本机位置 - 自身偏移 去比轨迹末端。
     // 一旦满足条件即锁定（arrived_hold_），之后持续悬停不再回 MPC 求解，
     // 避免在阈值附近悬停/振荡反复切换；收到新轨迹时由 globalTrajCallback 解锁。
-    // 终点距离/速度在这里提前计算，既用于锁定判定，也供末端减速使用。
+    // 终点距离/速度在这里提前计算，用于锁定判定。
     const Eigen::Vector3d virtual_center(
         current_mpc_state(0) - my_formation_offset(0),
         current_mpc_state(1) - my_formation_offset(1),
@@ -716,22 +712,8 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
         double vx = cos_psi * u[0] - sin_psi * u[1];
         double vy = sin_psi * u[0] + cos_psi * u[1];
 
-        // 末端减速：路径进度进入末端 0.5 s 后，按剩余终点距离线性缩放
-        // 指令速度，保证接近终点时速度单调下降，避免 MPC 反复冲过头。
-        // 注意：缩放只作用于实际指令，共享预测轨迹仍是 MPC 原始解；
-        // 第一阶段无邻居不影响，编队阶段若保留需再校验一致性。
-        double dock_s = 1.0;
-        if (t0 >= global_traj.back().t - 0.5) {
-            dock_s = std::clamp(end_dist / DOCKING_DISTANCE, 0.05, 1.0);
-            ROS_INFO_THROTTLE(1.0,
-                              "%s: docking end_dist=%.2f m, dock_s=%.2f, "
-                              "speed=%.2f m/s",
-                              UAV_NAME.c_str(), end_dist, dock_s, speed);
-        }
-        vx *= dock_s;
-        vy *= dock_s;
-        const double vz = u[2] * dock_s;
-        const double vw = u[3] * dock_s;
+        const double vz = u[2];
+        const double vw = u[3];
 
         geometry_msgs::TwistStamped cmd;
         cmd.header.stamp = ros::Time::now();
@@ -872,7 +854,6 @@ int main(int argc, char **argv) {
     try {
     // --- 参数读取 ---
     int my_id          = nh_private.param<int>("my_id", 0);
-    int tracking_model = nh_private.param<int>("tracking_model", 1);
     WORLD_FRAME        = nh_private.param<std::string>("world_frame", "world");
     const std::string formation_config_namespace =
                          nh_private.param<std::string>("formation_config_namespace", "/formation_config");
@@ -903,11 +884,8 @@ int main(int argc, char **argv) {
     double neighbor_timeout          = nh_private.param<double>("communication/neighbor_trajectory_timeout", 0.3);
     double neighbor_future_tolerance = nh_private.param<double>("communication/neighbor_future_tolerance", 0.05);
     double progress_timeout          = nh_private.param<double>("global_progress/timeout", 0.3);
-    double w_vel                     = nh_private.param<double>("mpc/w_vel", 300.0);
     double w_terminal_vel            = nh_private.param<double>("mpc/w_terminal_vel", 2000.0);
     double w_du                      = nh_private.param<double>("mpc/w_du", 100.0);
-    double terminal_pos_scale        = nh_private.param<double>("mpc/terminal_pos_scale", 0.2);
-    double docking_distance          = nh_private.param<double>("mpc/docking_distance", 1.5);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
         throw std::runtime_error(
             "communication/neighbor_trajectory_timeout must be positive");
@@ -919,9 +897,6 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(progress_timeout) || progress_timeout <= 0.0) {
         throw std::runtime_error("global_progress/timeout must be positive");
-    }
-    if (!std::isfinite(docking_distance) || docking_distance <= 0.0) {
-        throw std::runtime_error("mpc/docking_distance must be positive");
     }
     if (!std::isfinite(w_du) || w_du < 0.0) {
         throw std::runtime_error("mpc/w_du must be non-negative");
@@ -959,14 +934,9 @@ int main(int argc, char **argv) {
     if (!std::isfinite(ipopt_tol) || ipopt_tol <= 0.0) {
         throw std::runtime_error("mpc/ipopt_tol must be positive");
     }
-    if (!std::isfinite(terminal_pos_scale) || terminal_pos_scale < 0.0) {
-        throw std::runtime_error("mpc/terminal_pos_scale must be non-negative");
-    }
-
     MY_ID = my_id;
     MPC_HORIZON = N;
     MPC_DT = dt;
-    DOCKING_DISTANCE = docking_distance;
     obstacle_hold_dist = hold_dist;
     NEIGHBOR_TRAJECTORY_TIMEOUT = neighbor_timeout;
     NEIGHBOR_FUTURE_TOLERANCE = neighbor_future_tolerance;
@@ -985,16 +955,14 @@ int main(int argc, char **argv) {
     const auto own_offset = formation.offsets.at(my_id);
     my_formation_offset = Eigen::Vector4d(
         own_offset[0], own_offset[1], own_offset[2], own_offset[3]);
-    ROS_INFO("%s: leader_access=%d, model=%d, "
-             "neighbors=%zu, offsets=%zu",
-             UAV_NAME.c_str(), is_tracked, tracking_model,
+    ROS_INFO("%s: leader_access=%d, neighbors=%zu, offsets=%zu",
+             UAV_NAME.c_str(), is_tracked,
              neighbor_ids.size(), formation.offsets.size());
 
     // --- MPC 初始化 ---
     mpc_ptr.reset(new Mpc());
     mpc_ptr->setMyId(my_id);
     mpc_ptr->setTracked(is_tracked);
-    mpc_ptr->setTrackingModel(tracking_model);
     mpc_ptr->setFormationOffsets(formation.offsets);
 
     mpc_ptr->setPredictionHorizon(N);
@@ -1014,14 +982,11 @@ int main(int argc, char **argv) {
     mpc_ptr->setIpoptTol(ipopt_tol);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
     mpc_ptr->setCollisionWeight(w_ca);
-    mpc_ptr->setVelocityTrackWeight(
-        DM::diag(DM{w_vel, w_vel, w_vel, w_vel / 4.0}));
     mpc_ptr->setTerminalVelocityWeight(
         DM::diag(DM{w_terminal_vel, w_terminal_vel, w_terminal_vel,
                     w_terminal_vel / 4.0}));
     mpc_ptr->setControlIncrementWeight(
         DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
-    mpc_ptr->setTerminalPositionScale(terminal_pos_scale);
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
              "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f, w_ca=%.2f, "

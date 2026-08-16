@@ -46,7 +46,7 @@
     <param name="kino_astar/rou_time" value="50.0"/> <!-- 控制状态转移代价中的输入惩罚权重 -->
     <param name="kino_astar/lambda_heu" value="3.0"/> <!-- 调整启发式权重，影响搜索倾向 -->
     <param name="kino_astar/allocated_node_num" value="100000"/> <!-- 允许分配的最大搜索节点数 -->
-    <param name="kino_astar/goal_tolerance" value="2.0"/> <!-- 终点接近阈值，决定何时认为到达目标 -->
+    <param name="kino_astar/goal_tolerance" value="1.0"/> <!-- 终点接近阈值，决定何时认为到达目标 -->
     <param name="kino_astar/time_step_size" value="0.03"/> <!-- 状态传播和采样的时间步长 -->
     <param name="kino_astar/max_velocity" value="2.0"/> <!-- 速度上限 -->
     <param name="kino_astar/max_accelration" value="2.0"/> <!-- 加速度上限 -->
