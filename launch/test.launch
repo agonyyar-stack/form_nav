@@ -52,9 +52,8 @@
     <!-- 全局规划器-->
     <include file="$(find form_nav)/launch/kino_astar_grid.launch">
         <arg name="uav_id" value="uav0" />
-        <arg name="formation_offset_x" value="0.0" />
-        <arg name="formation_offset_y" value="0.0" />
-        <arg name="formation_offset_z" value="0.0" />
+        <arg name="my_id" value="0" />
+        <arg name="formation_config_file" value="$(find form_nav)/config/single_uav.yaml" />
     </include>
 
     <!-- 局部 MPC -->

@@ -9,19 +9,13 @@ offsets:
 agents:
   uav0:
     neighbors: [3]
-    leader_access: false
   uav1:
     neighbors: [0, 2]
-    leader_access: false
   uav2:
     neighbors: [5]
-    leader_access: false
   uav3:
     neighbors: [4]
-    leader_access: false
   uav4:
     neighbors: []
-    leader_access: true
   uav5:
     neighbors: [4]
-    leader_access: false

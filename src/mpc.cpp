@@ -10,10 +10,12 @@ Mpc::Mpc() {
     u_min_ = - u_max_;
     w_min_ = - w_max_;
     //权重矩阵Q,F
-    Q_ = DM::diag(DM{20000, 20000, 10000, 100}); //索引之前初始化size
+    Q_ = DM::diag(DM{20000, 20000, 10000, 100}); // 全局轨迹跟踪权重（可由 mpc/w_track 覆盖）
     F_ = DM::diag(DM{100, 100, 100, 100});       // 控制输入惩罚
     W_v_ = DM::diag(DM{2000, 2000, 2000, 500});  // 终端速度惩罚权重（终点刹车归零）
     R_d_ = DM::diag(DM{100, 100, 100, 25});      // 控制增量惩罚（抑制重规划导致的指令抖动）
+    // 编队误差权重：与跟踪权重 Q_ 拆分为独立项，默认比 Q_ 小一个数量级
+    Q_f_ = DM::diag(DM{2000, 2000, 1000, 10});
     //运动学参数
     Lx = 0.83; Kx = 1;
     Ly = 0.77; Ky = 1;
@@ -22,8 +24,6 @@ Mpc::Mpc() {
     beta = DM::diag(DM{-1/Lx, -1/Ly, -1/Lz, -1/Lw});
     gama = DM::diag(DM{Kx/Lx, Ky/Ly, Kz/Lz, Kw/Lw});
     kinematic_equation_ = setKinematicEquation(); 
-    // 默认不直接跟踪全局轨迹
-    is_tracked_ = false;
     // 编队偏移量由外部 setFormationOffsets() 注入，默认自身偏移为 [0,0,0,0]
     // ESDF 障碍物避障参数
     d_safe_oa = 0.6;       // 障碍物安全距离 (m)
@@ -196,17 +196,10 @@ ErrorTerms Mpc::formationError(int k_step, MX reference_state, std::map<int, MX>
         // sum_term += a_ij * ( mtimes(R_j_dot, v_j) + mtimes(R_j, v_j_dot) - G_j_ddot );
     }
 
-    // 虚拟领航者项
-    double b_i = is_tracked_ ? 1.0 : 0.0;
-    if (b_i > 0 && has_global_traj_) {
-        MX y_d = reference_state(Slice(0,4)); //全局
-        // MX y_d_dot = y_r(Slice(4,8)); //全局
-
-        S1_accum += b_i * (y_d - (p_i - M_i));
-        // S1_accum += b_i * (y_d - (p_i - M_i));
-
-        // S1_dot_accum += b_i * (y_d_dot - (p_i_dot - G_i_dot));
-    }
+    // 注意：全局轨迹跟踪项 (y_d - p_i) 已从 S1 中拆出，由 buildOpti()
+    // 用 Q_ 单独加权；S1 只保留邻居 containment 误差，用 Q_f_ 加权。
+    // 两者不再耦合，避免“编队误差与路径跟踪打架”导致振荡。
+    (void)reference_state;
 
     // 输出
     ret.S1       = S1_accum;
@@ -254,7 +247,7 @@ MX Mpc::ViLmpcDot(int k_step, MX reference_state, std::map<int, MX>& neighbor_pa
     }
     MX y_d_ddot = MX::zeros(4,1);  // 无加速度信息，置零
 
-    double b_i = is_tracked_ ? 1.0 : 0.0;
+    double b_i = 1.0;  // 分布式规划：所有机均直接跟踪自身物理参考
 
     double d_i = static_cast<double>(neighbor_params.size());  // 邻居数量即度
     
@@ -330,14 +323,9 @@ MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX reference_k, MX obstacle_k
         sin(yaw) * v_body(0) + cos(yaw) * v_body(1),
         v_body(2)});
 
-    // 期望物理位置 = 全局参考点 + 自身编队偏移（障碍查询与势垒阈值都以此为准）
-    MX offset_mx = MX(0.0);
-    auto off_it = formation_offsets_.find(my_id_);
-    if (off_it != formation_offsets_.end() && off_it->second.size() >= 3) {
-        offset_mx = MX::vertcat({
-            off_it->second[0], off_it->second[1], off_it->second[2]});
-    }
-    MX ref_pos = reference_k(Slice(0, 3)) + offset_mx;
+    // 期望物理位置：分布式规划下 reference_k 已是本机物理参考点
+    // （障碍查询与势垒阈值都以此为准），不再叠加编队偏移。
+    MX ref_pos = reference_k(Slice(0, 3));
 
     // 势垒阈值：参考点在当前最近障碍点处的距离（扣除机体半径），低于下限时
     // 取下限。这样沿全局路径（参考点即期望位置）势垒为零代价零梯度，MPC 保持
@@ -470,7 +458,9 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         MX reference_k = reference_param_(all, k);
 
         ErrorTerms errors1 = formationError(k, reference_k, neighbor_params_, X_k);
-        MX S_i1 = errors1.S1;
+        MX S_f = errors1.S1;  // 编队 containment 误差（仅邻居项）
+        // 全局轨迹跟踪误差：本机物理参考 vs 预测状态（位置 + 偏航）
+        MX track_err = X_k(Slice(0, 4)) - reference_k(Slice(0, 4));
 #if 0
         MX H_oa = esdfObstacleAvoidance(X_k); // 基于ESDF的障碍物避障（旧方案，已停用）
         cost += H_oa;
@@ -484,12 +474,15 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         cost += H_oa_kd;
 
         if (k < N_) {
-            cost += MX::mtimes({S_i1.T(), Q_, S_i1});
+            // 跟踪项与编队项独立加权，互不耦合
+            cost += MX::mtimes({track_err.T(), Q_, track_err});
+            cost += MX::mtimes({S_f.T(), Q_f_, S_f});
 
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k});
         } else {
-            cost += MX::mtimes({S_i1.T(), Q_, S_i1});
+            cost += MX::mtimes({track_err.T(), Q_, track_err});
+            cost += MX::mtimes({S_f.T(), Q_f_, S_f});
 
             // 终端速度惩罚：迫使预测末端速度归零，避免到达终点后仍持续
             // 给运动指令导致原地振荡。
@@ -609,21 +602,14 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                          casadi::DM::reshape(DM(nb_vec), 8, N_ + 1));
     }
 
-    // 查询点：固定用"期望物理位置"（全局参考点 + 自身编队偏移），不随上一轮
+    // 查询点：固定用"期望物理位置"（本机物理参考点），不随上一轮
     // 解变化。若用上一轮优化轨迹作为查询点，障碍物参数会随解抖动，形成
     // "查询点→障碍参数→解→查询点"的正反馈，导致轨迹杂乱；参考点缓慢变化，
     // 障碍参数稳定，MPC 沿全局路径保持平滑，仅在预测轨迹逼近障碍时被排斥。
-    Eigen::Vector3d query_offset = Eigen::Vector3d::Zero();
-    auto off_it = formation_offsets_.find(my_id_);
-    if (off_it != formation_offsets_.end() && off_it->second.size() >= 3) {
-        query_offset = Eigen::Vector3d(off_it->second[0], off_it->second[1],
-                                       off_it->second[2]);
-    }
     std::vector<Eigen::Vector3d> query_pts(N_ + 1);
     for (int k = 0; k <= N_; ++k) {
         const GlobalWaypoint reference = interpolateGlobalTrajectory(t + k * dt_);
-        query_pts[k] = Eigen::Vector3d(reference.x, reference.y, reference.z) +
-                       query_offset;
+        query_pts[k] = Eigen::Vector3d(reference.x, reference.y, reference.z);
     }
 
     // 最近点重查询重规划循环：查询点固定为参考位置，若因地图更新导致最近点

@@ -7,7 +7,6 @@
     <arg name="load_formation_config" default="true" />
     <arg name="neighbor_trajectory_timeout" default="0.3" />
     <arg name="neighbor_future_tolerance" default="0.05" />
-    <arg name="progress_timeout" default="0.3" />
     <!-- A multi-UAV parent launch can load this once and pass load_formation_config=false. -->
     <group if="$(arg load_formation_config)">
         <rosparam command="load" file="$(arg formation_config_file)"
@@ -46,6 +45,8 @@
         <param name="mpc/d_critical_oa" value="0.3" />   <!-- 障碍物临界距离 (m) -->
         <param name="mpc/d_safe_ca" value="0.3" />       <!-- 编队内安全距离 (m) -->
         <param name="mpc/w_ca" value="1000.0" />          <!-- 相互碰撞惩罚权重 -->
+        <param name="mpc/w_form" value="0.0" />        <!-- 编队误差权重（独立于跟踪权重 Q_，默认小一个数量级） -->
+        <param name="mpc/w_track" value="20000.0" />      <!-- 全局轨迹跟踪权重（原 Q_） -->
         <param name="mpc/nearest_obs_num" value="3" />    <!-- 每步查询最近障碍点数量 -->
         <param name="mpc/drone_radius" value="0.3" />     <!-- 无人机半径 (m) -->
         <param name="mpc/w_oa" value="30000.0" />         <!-- 障碍物避障权重 -->
@@ -66,8 +67,9 @@
                value="$(arg neighbor_trajectory_timeout)" />
         <param name="communication/neighbor_future_tolerance"
                value="$(arg neighbor_future_tolerance)" />
-        <param name="global_progress/timeout" value="$(arg progress_timeout)" />
         <param name="cloud_topic" value="/map_generator/global_cloud" />
+        <!-- 分布式规划：每机订阅自己的轨迹话题 -->
+        <remap from="/kino_astar/trajectory" to="/$(arg uav_id)/kino_astar/trajectory"/>
         <remap from="/sdf_map/cloud" to="/map_generator/global_cloud"/> 
         <remap from="/sdf_map/occupancy_inflate" to="/$(arg uav_id)/sdf_map/occupancy_inflate"/>
         <remap from="/sdf_map/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>

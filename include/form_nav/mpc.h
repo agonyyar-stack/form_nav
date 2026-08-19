@@ -51,6 +51,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     
     //权重矩阵
     DM Q_, F_, W_v_, R_d_; 
+    // 编队误差权重（与全局轨迹跟踪权重 Q_ 独立，避免两者耦合打架）
+    DM Q_f_;
 
     //运动学方程参数
     double Lx, Kx;
@@ -62,8 +64,6 @@ private: //存储了 MPC 算法运行时的配置和状态
 
     // 自身 ID
     int my_id_;
-    // 是否直接跟踪全局轨迹（虚拟领航者）
-    bool is_tracked_;
     // 所有无人机的编队偏移量 {id → [x, y, z, yaw]}
     std::map<int, std::vector<double>> formation_offsets_;
 
@@ -135,8 +135,6 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
 
     /// 设置自身 ID
     void setMyId(int id) { my_id_ = id; }
-    /// 设置是否直接跟踪全局轨迹
-    void setTracked(bool tracked) { is_tracked_ = tracked; }
     /// 设置编队偏移量表
     void setFormationOffsets(const std::map<int, std::vector<double>>& offsets) { formation_offsets_ = offsets; }
 
@@ -165,6 +163,10 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setTerminalVelocityWeight(const DM& w) { W_v_ = w; }
     /// 设置控制增量惩罚权重 (对角矩阵)
     void setControlIncrementWeight(const DM& w) { R_d_ = w; }
+    /// 设置全局轨迹跟踪权重 (对角矩阵，原 Q_)
+    void setTrackingWeight(const DM& w) { Q_ = w; }
+    /// 设置编队误差权重 (对角矩阵，独立于全局轨迹跟踪权重)
+    void setFormationErrorWeight(const DM& w) { Q_f_ = w; }
 
     /// 设置 ESDF CasADi 插值器
     void setEsdf(EsdfCasadi* esdf) { esdf_ptr_ = esdf; }

@@ -4,4 +4,3 @@ offsets:
 agents:
   uav0:
     neighbors: []
-    leader_access: true

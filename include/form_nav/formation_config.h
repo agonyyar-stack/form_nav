@@ -10,7 +10,6 @@
 struct FormationConfig {
     std::map<int, std::vector<double>> offsets;
     std::vector<int> neighbor_ids;
-    bool leader_access = false;
 
     static FormationConfig load(const ros::NodeHandle& node_handle,
                                 const std::string& config_namespace,

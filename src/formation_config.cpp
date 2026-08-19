@@ -106,9 +106,9 @@ FormationConfig FormationConfig::load(const ros::NodeHandle& node_handle,
                                  std::to_string(my_id));
     }
     if (own_agent->getType() != XmlRpc::XmlRpcValue::TypeStruct ||
-        !own_agent->hasMember("neighbors") || !own_agent->hasMember("leader_access")) {
+        !own_agent->hasMember("neighbors")) {
         throw std::runtime_error(agents_path + "/uav" + std::to_string(my_id) +
-                                 ": neighbors and leader_access are required");
+                                 ": neighbors is required");
     }
 
     XmlRpc::XmlRpcValue& neighbors = (*own_agent)["neighbors"];
@@ -140,11 +140,5 @@ FormationConfig FormationConfig::load(const ros::NodeHandle& node_handle,
         config.neighbor_ids.push_back(neighbor_id);
     }
 
-    XmlRpc::XmlRpcValue& leader_access = (*own_agent)["leader_access"];
-    if (leader_access.getType() != XmlRpc::XmlRpcValue::TypeBoolean) {
-        throw std::runtime_error(agents_path + "/uav" + std::to_string(my_id) +
-                                 "/leader_access: expected true or false");
-    }
-    config.leader_access = static_cast<bool>(leader_access);
     return config;
 }

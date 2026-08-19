@@ -92,7 +92,7 @@ add_executable(dwa_node src/dwa_node.cpp src/dwa_planner.cpp src/sdf_map.cpp src
 # 把外部库也链接到这个可执行文件
 target_link_libraries(dwa_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES})
 
-add_executable(kino_astar_node src/kino_astar_node.cpp src/kino_astar.cpp src/grid_map.cpp src/raycast.cpp)
+add_executable(kino_astar_node src/kino_astar_node.cpp src/kino_astar.cpp src/formation_config.cpp src/grid_map.cpp src/raycast.cpp)
 target_link_libraries(kino_astar_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES})
 add_dependencies(kino_astar_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
