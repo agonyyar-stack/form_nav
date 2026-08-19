@@ -37,6 +37,7 @@ double MPC_DT = 0.05;
 double NEIGHBOR_TRAJECTORY_TIMEOUT = 0.3;
 double NEIGHBOR_FUTURE_TOLERANCE = 0.05;
 const double LOOP_RATE = 20.0;
+double a_brake_eff = 0.0;  // 制动加速度（与 MPC 内部一致，用于当前状态可行性预检）
 
 std::unique_ptr<tf2_ros::Buffer> tf_buffer_ptr;
 std::unique_ptr<tf2_ros::TransformListener> tf_listener_ptr;
@@ -50,6 +51,7 @@ ros::Publisher predicted_path_viz_pub;
 ros::Publisher traveled_path_pub;
 ros::Publisher queried_obstacles_pub;  // 第三步：最近查询障碍点可视化
 ros::Publisher obstacle_cloud_pub;     // 第三步：KD-tree 中的障碍点云可视化
+ros::Publisher sub_goal_pub;           // 滚动子目标可视化
 
 // --- 状态量 ---
 // 显式初始化，避免首个传感器消息到达前把未定义数据送入求解器。
@@ -578,6 +580,21 @@ void controlLoop(const ros::TimerEvent&) {
     current_mpc_state(6) = vel_world_z;
     current_mpc_state(7) = vel_body_w;
 
+    // 制动可行性预检：当前状态须满足 MPC 制动约束 ||v_world||^2 <= 2*a_brake*d_g，
+    // 否则 k=0 约束必然不可行，直接悬停（阈值与 MPC 内部 a_brake_eff 一致）。
+    const double cur_speed_sq = vel_world_x * vel_world_x +
+                                vel_world_y * vel_world_y +
+                                vel_world_z * vel_world_z;
+    if (cur_speed_sq > 2.0 * a_brake_eff * end_dist) {
+        ROS_WARN_THROTTLE(0.5,
+                          "%s: current speed exceeds braking feasibility "
+                          "(v=%.2f m/s, d_g=%.2f m), holding.",
+                          UAV_NAME.c_str(), std::sqrt(cur_speed_sq), end_dist);
+        publishHoldCommand();
+        publishStationaryPrediction(solve_stamp);
+        return;
+    }
+
     // 第三步：近距碰撞安全兜底 —— 当前点已进入临界距离时停止求解并悬停，
     // 避免在代价势垒梯度很大的区间内求解产生异常指令。
     if (kd_tree_ready) {
@@ -770,6 +787,28 @@ void controlLoop(const ros::TimerEvent&) {
             obs_marker.points.push_back(p);
         }
         queried_obstacles_pub.publish(obs_marker);
+
+        // --- 滚动子目标可视化 ---
+        visualization_msgs::Marker sub_goal_marker;
+        sub_goal_marker.header.frame_id = WORLD_FRAME;
+        sub_goal_marker.header.stamp = ros::Time::now();
+        sub_goal_marker.ns = "mpc_sub_goal";
+        sub_goal_marker.id = 0;
+        sub_goal_marker.type = visualization_msgs::Marker::SPHERE;
+        sub_goal_marker.action = visualization_msgs::Marker::ADD;
+        sub_goal_marker.pose.orientation.w = 1.0;
+        const GlobalWaypoint& sub_goal = mpc_ptr->getLastRollingGoal();
+        sub_goal_marker.pose.position.x = sub_goal.x;
+        sub_goal_marker.pose.position.y = sub_goal.y;
+        sub_goal_marker.pose.position.z = sub_goal.z;
+        sub_goal_marker.scale.x = 0.25;
+        sub_goal_marker.scale.y = 0.25;
+        sub_goal_marker.scale.z = 0.25;
+        sub_goal_marker.color.a = 0.9;
+        sub_goal_marker.color.r = 1.0;
+        sub_goal_marker.color.g = 0.8;
+        sub_goal_marker.color.b = 0.0;
+        sub_goal_pub.publish(sub_goal_marker);
     } else {
         ROS_WARN_THROTTLE(1.0, "%s:MPC failed, holding.", UAV_NAME.c_str());
         publishHoldCommand();
@@ -816,7 +855,8 @@ int main(int argc, char **argv) {
         nh_private.param<std::string>("cloud_topic", "/map_generator/global_cloud");
     double neighbor_timeout          = nh_private.param<double>("communication/neighbor_trajectory_timeout", 0.3);
     double neighbor_future_tolerance = nh_private.param<double>("communication/neighbor_future_tolerance", 0.05);
-    double w_terminal_vel            = nh_private.param<double>("mpc/w_terminal_vel", 2000.0);
+    double lookahead_distance        = nh_private.param<double>("mpc/lookahead_distance", 2.0);
+    double brake_accel               = nh_private.param<double>("mpc/a_brake", 0.0);
     double w_du                      = nh_private.param<double>("mpc/w_du", 100.0);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
         throw std::runtime_error(
@@ -838,6 +878,12 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(w_track) || w_track < 0.0) {
         throw std::runtime_error("mpc/w_track must be non-negative");
+    }
+    if (!std::isfinite(lookahead_distance) || lookahead_distance <= 0.0) {
+        throw std::runtime_error("mpc/lookahead_distance must be positive");
+    }
+    if (!std::isfinite(brake_accel) || brake_accel < 0.0) {
+        throw std::runtime_error("mpc/a_brake must be non-negative");
     }
     if (nearest_obs_num <= 0) {
         throw std::runtime_error("mpc/nearest_obs_num must be positive");
@@ -911,9 +957,9 @@ int main(int argc, char **argv) {
     mpc_ptr->setIpoptTol(ipopt_tol);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
     mpc_ptr->setCollisionWeight(w_ca);
-    mpc_ptr->setTerminalVelocityWeight(
-        DM::diag(DM{w_terminal_vel, w_terminal_vel, w_terminal_vel,
-                    w_terminal_vel / 4.0}));
+    mpc_ptr->setLookaheadDistance(lookahead_distance);
+    mpc_ptr->setBrakeAcceleration(brake_accel);
+    a_brake_eff = brake_accel > 0.0 ? brake_accel : 0.8 * u_max;
     mpc_ptr->setControlIncrementWeight(
         DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
     // 编队误差权重：独立于全局轨迹跟踪权重（默认小一个数量级），
@@ -928,12 +974,14 @@ int main(int argc, char **argv) {
              "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f, w_ca=%.2f, "
              "w_form=%.2f, w_track=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, beta=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
-             "neighbor_timeout=%.3f, future_tolerance=%.3f",
+             "neighbor_timeout=%.3f, future_tolerance=%.3f, "
+             "lookahead=%.2f, a_brake=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
              d_safe_oa, d_crit_oa, d_safe_ca, w_ca, w_form, w_track,
              nearest_obs_num, drone_radius, w_oa, obs_beta, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
-             NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE);
+             NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
+             lookahead_distance, a_brake_eff);
 
     // 第一阶段不使用障碍物代价，暂时停用 ESDF 地图初始化；原代码保留。
 #if 0
@@ -982,6 +1030,8 @@ int main(int argc, char **argv) {
         "/" + UAV_NAME + "/mpc_queried_obstacles", 10);
     obstacle_cloud_pub = nh.advertise<sensor_msgs::PointCloud2>(
         "/" + UAV_NAME + "/obstacle_cloud", 10);
+    sub_goal_pub = nh.advertise<visualization_msgs::Marker>(
+        "/" + UAV_NAME + "/mpc_sub_goal_marker", 10);
 
     ros::Rate rate(LOOP_RATE);
 
