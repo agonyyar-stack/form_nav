@@ -75,6 +75,9 @@ link_directories(/usr/local/lib)
 add_executable(random_obs src/random_obs.cpp)
 target_link_libraries(random_obs ${catkin_LIBRARIES})
 
+add_executable(fixed_obs src/fixed_obs.cpp)
+target_link_libraries(fixed_obs ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+
 add_executable(astar_node src/astar_node.cpp src/a_star.cpp src/grid_map.cpp src/raycast.cpp)
 target_link_libraries(astar_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES})
 
