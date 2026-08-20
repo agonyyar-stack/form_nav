@@ -82,8 +82,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     KdTreeMap* kd_tree_ptr_;   // 指向障碍物 KD-tree 的指针 (外部管理生命周期)
     int nearest_obs_num_;      // 每个预测步查询的最近障碍点数量 M
     double drone_radius_;      // 无人机半径 (m)，有效距离 = ||p-o|| - r_drone
-    double beta_;              // softplus 势垒系数 (参考实现取 32，本项目实测默认 8)
-    double obs_floor_;         // 势垒下限：参考点自身比该距离更贴近障碍时按下限施加排斥
+    double safe_dist_;         // 对数势垒最小安全距离 L (m)，有效距离口径（扣无人机半径）
+    double detect_range_;      // 对数势垒探测范围 D̄ (m)，须大于 safe_dist_
     int replan_max_iter_;      // 最近点重查询重规划的最大迭代次数
     bool use_obstacle_velocity_term_; // 是否启用速度方向项（论文对比过：关闭后势场径向对称，易局部极小）
 
@@ -113,6 +113,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     double built_a_brake_;
     size_t built_neighbor_count_;
     int built_nearest_obs_num_;
+    double built_detect_range_;
+    double built_safe_dist_;
     int built_ipopt_max_iter_;
     int ipopt_max_iter_;  // IPOPT 最大迭代次数（可调，避障势垒陡峭时可加大）
     double built_ipopt_tol_;
@@ -165,8 +167,6 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setObstacleCriticalDistance(double d) { d_critical_oa = d; }
     /// 设置障碍物避障权重
     void setObstacleWeight(double w) { Wo = w; }
-    /// 设置势垒下限（参考点贴障碍时的最小保持距离）
-    void setObstacleFloor(double d) { obs_floor_ = d; }
     /// 设置编队内安全距离 (m)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
     /// 设置相互碰撞惩罚权重
@@ -189,8 +189,10 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setNearestObstacleNum(int num) { nearest_obs_num_ = num; }
     /// 设置无人机半径 (m)
     void setDroneRadius(double r) { drone_radius_ = r; }
-    /// 设置 softplus 势垒系数
-    void setObstacleBeta(double beta) { beta_ = beta; }
+    /// 设置对数避障势垒的最小安全距离 (m，有效距离口径)
+    void setSafeDistance(double d) { safe_dist_ = d; }
+    /// 设置对数避障势垒的探测范围 (m)，须大于安全距离
+    void setDetectionRange(double d) { detect_range_ = d; }
     /// 设置最近点重查询重规划的最大迭代次数
     void setReplanMaxIter(int iter) { replan_max_iter_ = iter; }
     /// 设置是否启用障碍物代价的速度方向项
@@ -218,8 +220,8 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 基于 ESDF 的障碍物避障项 (替代原来的 obstacleAvoidance)
     MX esdfObstacleAvoidance(MX current_states);
 
-    /// 基于 KD-tree 最近障碍点的避障项（障碍点作为参数，不在符号图内查询）
-    MX kdtreeObstacleAvoidance(MX current_states, MX reference_k, MX obstacle_k);
+    /// 基于 KD-tree 最近障碍点的对数势垒避障项（障碍点作为参数，不在符号图内查询）
+    MX kdtreeObstacleAvoidance(MX current_states, MX obstacle_k);
 
     MX collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& neighbor_params, MX current_states); //编队内碰撞避让项
 

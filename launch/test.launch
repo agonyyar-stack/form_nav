@@ -1,6 +1,6 @@
 <launch>
     <!-- random=随机障碍物, fixed=固定复杂场景 -->
-    <arg name="scene" default="fixed" />
+    <arg name="scene" default="random" />
 
     <!-- gazebo -->
     <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">

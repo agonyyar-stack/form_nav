@@ -37,8 +37,8 @@ Mpc::Mpc() {
     kd_tree_ptr_ = nullptr;   // 障碍物 KD-tree 指针，由外部设置
     nearest_obs_num_ = 3;     // 每个预测步查询的最近障碍点数量
     drone_radius_ = 0.35;     // 无人机半径 (m)
-    beta_ = 8.0;              // softplus 势垒系数（实测 8 比 32 更容易收敛）
-    obs_floor_ = 0.05;        // 势垒下限（m）
+    safe_dist_ = 0.5;         // 对数势垒最小安全距离 L (m，有效距离口径)
+    detect_range_ = 2.5;      // 对数势垒探测范围 D̄ (m)
     replan_max_iter_ = 2;     // 最近点重查询重规划最大迭代次数
     use_obstacle_velocity_term_ = true; // 速度方向项默认开启
     ipopt_max_iter_ = 100;    // IPOPT 最大迭代次数
@@ -52,6 +52,8 @@ Mpc::Mpc() {
     built_a_brake_ = -1.0;
     built_neighbor_count_ = 0;
     built_nearest_obs_num_ = -1;
+    built_detect_range_ = -1.0;
+    built_safe_dist_ = -1.0;
     built_ipopt_max_iter_ = -1;
     built_ipopt_tol_ = -1.0;
     //碰撞参数
@@ -101,6 +103,11 @@ void Mpc::setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj) {
     global_traj_ = traj;
     has_global_traj_ = !traj.empty();
     if (!has_global_traj_) return;
+
+    // 新轨迹到来：上一轮预测轨迹不再适用，障碍查询回到首轮直线采样。
+    has_last_solution_ = false;
+    last_pred_x_.resize(0, 0);
+    last_u_.resize(0, 0);
 
     // 预计算累积弧长表，供滚动子目标沿弧长前推
     path_arclength_.resize(global_traj_.size());
@@ -377,50 +384,26 @@ MX Mpc::esdfObstacleAvoidance(MX current_states) {
     return H_oa;
 }
 
-MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX reference_k, MX obstacle_k) {
+MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
     MX H_oa = MX(0.0);
-    if (kd_tree_ptr_ == nullptr || kd_tree_ptr_->empty()) {
+    if (kd_tree_ptr_ == nullptr || kd_tree_ptr_->empty() ||
+        detect_range_ <= safe_dist_) {
         // 无 KD-tree 数据时返回零惩罚（与 ESDF 缺数据时行为一致）
         return H_oa;
     }
 
     MX pos = current_states(Slice(0, 3));       // 世界系位置
-    MX yaw = current_states(3);
-    MX v_body = current_states(Slice(4, 7));    // 机体系速度 [vx, vy, vz]
-    // 机体速度 -> 世界速度（速度方向项需要世界系）
-    MX v_world = MX::vertcat({
-        cos(yaw) * v_body(0) - sin(yaw) * v_body(1),
-        sin(yaw) * v_body(0) + cos(yaw) * v_body(1),
-        v_body(2)});
 
-    // 期望物理位置：分布式规划下 reference_k 已是本机物理参考点
-    // （障碍查询与势垒阈值都以此为准），不再叠加编队偏移。
-    MX ref_pos = reference_k(Slice(0, 3));
-
-    // 势垒阈值：参考点在当前最近障碍点处的距离（扣除机体半径），低于下限时
-    // 取下限。这样沿全局路径（参考点即期望位置）势垒为零代价零梯度，MPC 保持
-    // 平滑；只有预测轨迹比参考点更贴近障碍（或参考点本身压进障碍）时才排斥。
-    MX o0 = obstacle_k(Slice(0, 3));
-    MX d_ref = MX::norm_2(ref_pos - o0) - drone_radius_;
-    MX thr = MX::fmax(d_ref, obs_floor_);
-
+    // 对数势垒：H = max{ -M * ln( (d - L) / (D̄ - L) ), 0 }
+    // d 为有效距离（扣无人机半径），L=safe_dist_ 为最小安全距离，
+    // D̄=detect_range_ 为探测范围。d > D̄ 时严格为零；d -> L 时趋于无穷。
+    // 钳位 d >= L + eps 避免 log 参数非正，同时限制最大惩罚值。
     for (int m = 0; m < nearest_obs_num_; ++m) {
         MX o = obstacle_k(Slice(3 * m, 3 * m + 3));
-        MX d_pred = MX::norm_2(pos - o) - drone_radius_;
-        // 二次斜坡势垒（C1）：d_pred < thr 时以 (excess)^2 排斥，边界处值与
-        // 梯度都连续，避免 fmax 线性斜坡在激活边界处把 IPOPT 步长计算搞挂；
-        // 边界外（excess<=0）严格为零代价零梯度，不与跟踪代价沿路径对抗。
-        MX excess = thr - d_pred;
-        MX relu = MX::fmax(0.0, excess);
-        MX term = Wo * relu * relu;
-        if (use_obstacle_velocity_term_) {
-            // 速度方向项（可选）：沿障碍方向的速度分量，用 sqrt(dot^2+eps)
-            // 光滑化避免 |·| 在 0 处不可导。默认关闭（有全局路径引导时不需要）。
-            MX dir = (o - pos) / (MX::norm_2(o - pos) + 1e-6);
-            MX v_dot_dir = MX::dot(v_world, dir);
-            MX v_toward = MX::sqrt(v_dot_dir * v_dot_dir + 1e-6);
-            term *= v_toward;
-        }
+        MX d_eff = MX::norm_2(pos - o) - drone_radius_;
+        MX d_c = MX::fmax(d_eff, safe_dist_ + 1e-2);
+        MX term = Wo * MX::fmax(0.0, -log((d_c - safe_dist_) /
+                                          (detect_range_ - safe_dist_)));
         H_oa += term;
     }
     return H_oa;
@@ -500,6 +483,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         std::abs(built_a_brake_ - a_brake_) < 1e-9 &&
         built_neighbor_count_ == neighbors.size() &&
         built_nearest_obs_num_ == nearest_obs_num_ &&
+        std::abs(built_detect_range_ - detect_range_) < 1e-9 &&
+        std::abs(built_safe_dist_ - safe_dist_) < 1e-9 &&
         built_ipopt_max_iter_ == ipopt_max_iter_ &&
         std::abs(built_ipopt_tol_ - ipopt_tol_) < 1e-12) {
         return true;
@@ -540,9 +525,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         MX H_ca = collisionAvoidance(reference_k, k, neighbor_params_, X_k);
         cost += H_ca;
 
-        // KD-tree 静态避障代价（第三步）：障碍点是参数，代价处处可导
-        MX H_oa_kd = kdtreeObstacleAvoidance(X_k, reference_k,
-                                             obstacle_param_(all, k));
+        // KD-tree 对数势垒避障代价（障碍点是参数，代价处处可导）
+        MX H_oa_kd = kdtreeObstacleAvoidance(X_k, obstacle_param_(all, k));
         cost += H_oa_kd;
 
         if (k < N_) {
@@ -617,6 +601,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     built_a_brake_ = a_brake_;
     built_neighbor_count_ = neighbors.size();
     built_nearest_obs_num_ = nearest_obs_num_;
+    built_detect_range_ = detect_range_;
+    built_safe_dist_ = safe_dist_;
     built_ipopt_max_iter_ = ipopt_max_iter_;
     built_ipopt_tol_ = ipopt_tol_;
     has_last_solution_ = false;
@@ -688,19 +674,39 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                          casadi::DM::reshape(DM(nb_vec), 8, N_ + 1));
     }
 
-    // 查询点：固定用滚动子目标，不随上一轮解变化。若用上一轮优化轨迹作为
-    // 查询点，障碍物参数会随解抖动，形成"查询点→障碍参数→解→查询点"的
-    // 正反馈，导致轨迹杂乱；子目标缓慢变化，障碍参数稳定，MPC 沿全局路径
-    // 保持平滑，仅在预测轨迹逼近障碍时被排斥。
-    std::vector<Eigen::Vector3d> query_pts(N_ + 1);
-    for (int k = 0; k <= N_; ++k) {
-        query_pts[k] = Eigen::Vector3d(rolling_goal_.x, rolling_goal_.y,
-                                       rolling_goal_.z);
-    }
+    // 查询点：
+    //   非首轮：用上一轮预测轨迹整体前移一列 —— k=0..N-1 取上一轮第 k+1 列
+    //           （当前状态 ≈ 上一轮第 1 列），k=N 无对应列，用滚动子目标兜底；
+    //   首轮（无上一轮解/新轨迹到达）：当前状态位置 → 滚动子目标 直线采样 N+1 点。
+    const Eigen::Vector3d cur_pos(current_states(0), current_states(1),
+                                  current_states(2));
+    const Eigen::Vector3d goal_pos(rolling_goal_.x, rolling_goal_.y,
+                                   rolling_goal_.z);
+    auto buildQueryPoints =
+        [&](const Eigen::MatrixXd* pred) -> std::vector<Eigen::Vector3d> {
+        std::vector<Eigen::Vector3d> pts(N_ + 1);
+        if (pred != nullptr && pred->rows() == 8 && pred->cols() == N_ + 1) {
+            for (int k = 0; k < N_; ++k) {
+                pts[k] = pred->block<3, 1>(0, k + 1);
+            }
+            pts[N_] = goal_pos;
+        } else {
+            for (int k = 0; k <= N_; ++k) {
+                const double ratio = static_cast<double>(k) /
+                                     static_cast<double>(N_);
+                pts[k] = (1.0 - ratio) * cur_pos + ratio * goal_pos;
+            }
+        }
+        return pts;
+    };
 
-    // 最近点重查询重规划循环：查询点固定为参考位置，若因地图更新导致最近点
-    // 索引变化（如后续动态障碍），带新参数重解；静态地图下通常一次求解即可。
-    // 热启动：每轮用上一轮解作为初值，保证 20 Hz 控制率下求解耗时可控。
+    std::vector<Eigen::Vector3d> query_pts =
+        buildQueryPoints(has_last_solution_ ? &last_pred_x_ : nullptr);
+
+    // 重查询重规划循环：每轮解出后，用刚解出的预测轨迹重新生成查询点（同样
+    // 前移一列 + 子目标兜底），若最近障碍点索引相对本轮发生变化（地图更新或
+    // 轨迹偏离），带新参数再解，否则停止。replan_max_iter_=0 时每控制周期
+    // 单次求解，查询引导由跨轮"上一轮预测"迭代完成。
     bool solved = false;
     for (int iter = 0; iter <= replan_max_iter_; ++iter) {
         std::vector<int> cur_indices;
@@ -743,14 +749,17 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
             break;
         }
 
-        // 用相同的参考查询点重新查询，比较最近点索引是否变化（地图更新时
-        // 会变化）；未变化则说明障碍参数与查询一致，无需再规划。
+        // 用刚解出的预测轨迹生成下一轮查询点，最近障碍点索引变化则重解
         std::vector<int> check_indices;
-        std::vector<double> check_values = queryObstacleValues(query_pts, check_indices);
+        const std::vector<Eigen::Vector3d> next_query_pts =
+            buildQueryPoints(&last_pred_x_);
+        std::vector<double> check_values =
+            queryObstacleValues(next_query_pts, check_indices);
         (void)check_values;
         if (check_indices == cur_indices) {
             break;
         }
+        query_pts = next_query_pts;
     }
 
     // 同步可视化用障碍点：以最后一次求解实际使用的查询点为准
