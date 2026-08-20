@@ -1,10 +1,18 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="uav_id" default="uav4" />
-  <arg name="formation_offset_x" default="1.0" />
-  <arg name="formation_offset_y" default="0.0" />
-  <arg name="formation_offset_z" default="0.0" />
+  <arg name="my_id" default="4" />
   <arg name="world_frame" default="world" />
+  <arg name="formation_config_file"
+       default="$(find form_nav)/config/formations.yaml" />
+  <arg name="formation_config_namespace" default="/formation_config" />
+  <arg name="load_formation_config" default="true" />
+
+  <!-- 从 yaml 加载编队配置（父 launch 已加载时可传 false） -->
+  <group if="$(arg load_formation_config)">
+    <rosparam command="load" file="$(arg formation_config_file)"
+              ns="$(arg formation_config_namespace)" />
+  </group>
 
   <node name="$(arg uav_id)_odom_to_world" pkg="form_nav" type="odom_to_world" output="screen">
     <param name="world_frame" value="$(arg world_frame)" />
@@ -15,9 +23,8 @@
 
   <node name="$(arg uav_id)_kino_astar_node" pkg="form_nav" type="kino_astar_node" output="screen">
     <param name="world_frame" value="$(arg world_frame)" />
-    <param name="planning_uav_formation_offset_x" value="$(arg formation_offset_x)" />
-    <param name="planning_uav_formation_offset_y" value="$(arg formation_offset_y)" />
-    <param name="planning_uav_formation_offset_z" value="$(arg formation_offset_z)" />
+    <param name="my_id" value="$(arg my_id)" />
+    <param name="formation_config_namespace" value="$(arg formation_config_namespace)" />
     <param name="grid_map/resolution" value="0.1" /> <!-- 栅格地图分辨率，单位 m/格 -->
     <param name="grid_map/map_size_x" value="50.0" /> <!-- 地图 X 方向尺寸，单位 m -->
     <param name="grid_map/map_size_y" value="50.0" /> <!-- 地图 Y 方向尺寸，单位 m -->
@@ -46,7 +53,7 @@
     <param name="kino_astar/rou_time" value="50.0"/> <!-- 控制状态转移代价中的输入惩罚权重 -->
     <param name="kino_astar/lambda_heu" value="3.0"/> <!-- 调整启发式权重，影响搜索倾向 -->
     <param name="kino_astar/allocated_node_num" value="100000"/> <!-- 允许分配的最大搜索节点数 -->
-    <param name="kino_astar/goal_tolerance" value="1.0"/> <!-- 终点接近阈值，决定何时认为到达目标 -->
+    <param name="kino_astar/goal_tolerance" value="2.0"/> <!-- 终点接近阈值，决定何时认为到达目标 -->
     <param name="kino_astar/time_step_size" value="0.03"/> <!-- 状态传播和采样的时间步长 -->
     <param name="kino_astar/max_velocity" value="2.0"/> <!-- 速度上限 -->
     <param name="kino_astar/max_accelration" value="2.0"/> <!-- 加速度上限 -->
@@ -55,7 +62,14 @@
 
     <remap from="/grid_map/cloud" to="/map_generator/global_cloud"/>
     <remap from="/grid_map/odom" to="/$(arg uav_id)/mavros/local_position/odom_world"/>
+    <remap from="/grid_map/occupancy" to="/$(arg uav_id)/grid_map/occupancy"/>
+    <remap from="/grid_map/occupancy_inflate" to="/$(arg uav_id)/grid_map/occupancy_inflate"/>
+    <remap from="/grid_map/unknown" to="/$(arg uav_id)/grid_map/unknown"/>
     <remap from="/kino_astar/odom" to="/$(arg uav_id)/mavros/local_position/odom_world"/>
+    <!-- 分布式规划：轨迹与可视化话题按无人机命名空间隔离 -->
+    <remap from="/kino_astar/trajectory" to="/$(arg uav_id)/kino_astar/trajectory"/>
+    <remap from="/kino_astar/path_marker" to="/$(arg uav_id)/kino_astar/path_marker"/>
+    <remap from="/kino_astar/goal_marker" to="/$(arg uav_id)/kino_astar/goal_marker"/>
   </node>
 
 </launch>

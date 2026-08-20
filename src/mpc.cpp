@@ -10,10 +10,15 @@ Mpc::Mpc() {
     u_min_ = - u_max_;
     w_min_ = - w_max_;
     //权重矩阵Q,F
-    Q_ = DM::diag(DM{20000, 20000, 10000, 100}); //索引之前初始化size
+    Q_ = DM::diag(DM{20000, 20000, 10000, 100}); // 全局轨迹跟踪权重（可由 mpc/w_track 覆盖）
     F_ = DM::diag(DM{100, 100, 100, 100});       // 控制输入惩罚
-    W_v_ = DM::diag(DM{2000, 2000, 2000, 500});  // 终端速度惩罚权重（终点刹车归零）
     R_d_ = DM::diag(DM{100, 100, 100, 25});      // 控制增量惩罚（抑制重规划导致的指令抖动）
+    // 滚动子目标参数
+    lookahead_distance_ = 2.0;                   // 子目标沿弧长前瞻距离 (m)
+    a_brake_ = 0.8 * u_max_;                     // 制动加速度（保守最大减速度）
+    has_rolling_goal_ = false;
+    // 编队误差权重：与跟踪权重 Q_ 拆分为独立项，默认比 Q_ 小一个数量级
+    Q_f_ = DM::diag(DM{2000, 2000, 1000, 10});
     //运动学参数
     Lx = 0.83; Kx = 1;
     Ly = 0.77; Ky = 1;
@@ -22,8 +27,6 @@ Mpc::Mpc() {
     beta = DM::diag(DM{-1/Lx, -1/Ly, -1/Lz, -1/Lw});
     gama = DM::diag(DM{Kx/Lx, Ky/Ly, Kz/Lz, Kw/Lw});
     kinematic_equation_ = setKinematicEquation(); 
-    // 默认不直接跟踪全局轨迹
-    is_tracked_ = false;
     // 编队偏移量由外部 setFormationOffsets() 注入，默认自身偏移为 [0,0,0,0]
     // ESDF 障碍物避障参数
     d_safe_oa = 0.6;       // 障碍物安全距离 (m)
@@ -46,6 +49,7 @@ Mpc::Mpc() {
     built_dt_ = -1.0;
     built_u_max_ = -1.0;
     built_w_max_ = -1.0;
+    built_a_brake_ = -1.0;
     built_neighbor_count_ = 0;
     built_nearest_obs_num_ = -1;
     built_ipopt_max_iter_ = -1;
@@ -98,6 +102,17 @@ void Mpc::setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj) {
     has_global_traj_ = !traj.empty();
     if (!has_global_traj_) return;
 
+    // 预计算累积弧长表，供滚动子目标沿弧长前推
+    path_arclength_.resize(global_traj_.size());
+    path_arclength_[0] = 0.0;
+    for (size_t i = 1; i < global_traj_.size(); ++i) {
+        const Eigen::Vector3d prev(global_traj_[i - 1].x, global_traj_[i - 1].y,
+                                   global_traj_[i - 1].z);
+        const Eigen::Vector3d cur(global_traj_[i].x, global_traj_[i].y,
+                                  global_traj_[i].z);
+        path_arclength_[i] = path_arclength_[i - 1] + (cur - prev).norm();
+    }
+
     std::cout << "[MPC] Global trajectory set with " << traj.size() << " waypoints, t ∈ ["
               << traj.front().t << ", " << traj.back().t << "]" << std::endl;
 }
@@ -131,6 +146,61 @@ GlobalWaypoint Mpc::interpolateGlobalTrajectory(double t) const {
     result.vz = lerp(previous.vz, next.vz);
     result.vyaw = lerp(previous.vyaw, next.vyaw);
     return result;
+}
+
+GlobalWaypoint Mpc::selectRollingGoal(double t0) {
+    GlobalWaypoint goal;
+    has_rolling_goal_ = false;
+    if (!has_global_traj_ || global_traj_.empty() ||
+        path_arclength_.size() != global_traj_.size()) {
+        return goal;
+    }
+
+    const double t_front = global_traj_.front().t;
+    const double t_end = global_traj_.back().t;
+    const double t_clamped = std::min(std::max(t0, t_front), t_end);
+
+    // 按累计时间二分找到不超过 t_clamped 的最近航点索引
+    auto upper = std::lower_bound(
+        global_traj_.begin(), global_traj_.end(), t_clamped,
+        [](const GlobalWaypoint& wp, double query_time) {
+            return wp.t < query_time;
+        });
+    size_t i0 = static_cast<size_t>(std::distance(global_traj_.begin(), upper));
+    if (i0 > 0 && global_traj_[i0].t > t_clamped) --i0;
+
+    // 已到轨迹末端：子目标即终点
+    if (i0 >= global_traj_.size() - 1) {
+        goal = global_traj_.back();
+        goal.vyaw = 0.0;
+        has_rolling_goal_ = true;
+        rolling_goal_ = goal;
+        return goal;
+    }
+
+    // 沿弧长前推 lookahead_distance_
+    const double target_arc = path_arclength_[i0] + std::max(0.0, lookahead_distance_);
+    size_t i1 = i0;
+    while (i1 + 1 < global_traj_.size() &&
+           path_arclength_[i1 + 1] < target_arc) {
+        ++i1;
+    }
+    if (i1 >= global_traj_.size() - 1) {
+        goal = global_traj_.back();
+    } else {
+        const double seg_len = path_arclength_[i1 + 1] - path_arclength_[i1];
+        const double ratio = seg_len > 0.0
+                                 ? (target_arc - path_arclength_[i1]) / seg_len
+                                 : 0.0;
+        const double t_g = global_traj_[i1].t +
+                           ratio * (global_traj_[i1 + 1].t - global_traj_[i1].t);
+        goal = interpolateGlobalTrajectory(std::min(t_g, t_end));
+    }
+    // 子目标只使用位置/偏航（yaw 参考恒 0），速度字段不使用
+    goal.vyaw = 0.0;
+    has_rolling_goal_ = true;
+    rolling_goal_ = goal;
+    return goal;
 }
 
 ErrorTerms Mpc::formationError(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states) {
@@ -196,17 +266,10 @@ ErrorTerms Mpc::formationError(int k_step, MX reference_state, std::map<int, MX>
         // sum_term += a_ij * ( mtimes(R_j_dot, v_j) + mtimes(R_j, v_j_dot) - G_j_ddot );
     }
 
-    // 虚拟领航者项
-    double b_i = is_tracked_ ? 1.0 : 0.0;
-    if (b_i > 0 && has_global_traj_) {
-        MX y_d = reference_state(Slice(0,4)); //全局
-        // MX y_d_dot = y_r(Slice(4,8)); //全局
-
-        S1_accum += b_i * (y_d - (p_i - M_i));
-        // S1_accum += b_i * (y_d - (p_i - M_i));
-
-        // S1_dot_accum += b_i * (y_d_dot - (p_i_dot - G_i_dot));
-    }
+    // 注意：全局轨迹跟踪项 (y_d - p_i) 已从 S1 中拆出，由 buildOpti()
+    // 用 Q_ 单独加权；S1 只保留邻居 containment 误差，用 Q_f_ 加权。
+    // 两者不再耦合，避免“编队误差与路径跟踪打架”导致振荡。
+    (void)reference_state;
 
     // 输出
     ret.S1       = S1_accum;
@@ -254,7 +317,7 @@ MX Mpc::ViLmpcDot(int k_step, MX reference_state, std::map<int, MX>& neighbor_pa
     }
     MX y_d_ddot = MX::zeros(4,1);  // 无加速度信息，置零
 
-    double b_i = is_tracked_ ? 1.0 : 0.0;
+    double b_i = 1.0;  // 分布式规划：所有机均直接跟踪自身物理参考
 
     double d_i = static_cast<double>(neighbor_params.size());  // 邻居数量即度
     
@@ -330,14 +393,9 @@ MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX reference_k, MX obstacle_k
         sin(yaw) * v_body(0) + cos(yaw) * v_body(1),
         v_body(2)});
 
-    // 期望物理位置 = 全局参考点 + 自身编队偏移（障碍查询与势垒阈值都以此为准）
-    MX offset_mx = MX(0.0);
-    auto off_it = formation_offsets_.find(my_id_);
-    if (off_it != formation_offsets_.end() && off_it->second.size() >= 3) {
-        offset_mx = MX::vertcat({
-            off_it->second[0], off_it->second[1], off_it->second[2]});
-    }
-    MX ref_pos = reference_k(Slice(0, 3)) + offset_mx;
+    // 期望物理位置：分布式规划下 reference_k 已是本机物理参考点
+    // （障碍查询与势垒阈值都以此为准），不再叠加编队偏移。
+    MX ref_pos = reference_k(Slice(0, 3));
 
     // 势垒阈值：参考点在当前最近障碍点处的距离（扣除机体半径），低于下限时
     // 取下限。这样沿全局路径（参考点即期望位置）势垒为零代价零梯度，MPC 保持
@@ -439,6 +497,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         built_N_ == N_ && std::abs(built_dt_ - dt_) < 1e-9 &&
         std::abs(built_u_max_ - u_max_) < 1e-9 &&
         std::abs(built_w_max_ - w_max_) < 1e-9 &&
+        std::abs(built_a_brake_ - a_brake_) < 1e-9 &&
         built_neighbor_count_ == neighbors.size() &&
         built_nearest_obs_num_ == nearest_obs_num_ &&
         built_ipopt_max_iter_ == ipopt_max_iter_ &&
@@ -452,10 +511,11 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     X = opti_->variable(8, N_ + 1); //状态序列，位姿速度
     U = opti_->variable(4, N_); //控制序列,速度指令(机体坐标系)
 
-    // 参数：参考轨迹、当前状态、最近障碍点（KD-tree 查询在求解器外完成）
-    reference_param_ = opti_->parameter(8, N_ + 1);
+    // 参数：滚动子目标参考、当前状态、最近障碍点（KD-tree 查询在求解器外完成）、终点
+    reference_param_ = opti_->parameter(4, N_ + 1);
     X_cur_param_ = opti_->parameter(8, 1);
     obstacle_param_ = opti_->parameter(3 * nearest_obs_num_, N_ + 1);
+    goal_param_ = opti_->parameter(3, 1);
 
     // 邻居轨迹参数
     neighbor_params_.clear();
@@ -470,7 +530,9 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         MX reference_k = reference_param_(all, k);
 
         ErrorTerms errors1 = formationError(k, reference_k, neighbor_params_, X_k);
-        MX S_i1 = errors1.S1;
+        MX S_f = errors1.S1;  // 编队 containment 误差（仅邻居项）
+        // 全局轨迹跟踪误差：本机物理参考 vs 预测状态（位置 + 偏航）
+        MX track_err = X_k(Slice(0, 4)) - reference_k(Slice(0, 4));
 #if 0
         MX H_oa = esdfObstacleAvoidance(X_k); // 基于ESDF的障碍物避障（旧方案，已停用）
         cost += H_oa;
@@ -484,27 +546,15 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         cost += H_oa_kd;
 
         if (k < N_) {
-            cost += MX::mtimes({S_i1.T(), Q_, S_i1});
-
+            // 跟踪项与编队项独立加权，互不耦合
+            // cost += MX::mtimes({track_err.T(), Q_, track_err});
+            cost += MX::mtimes({S_f.T(), Q_f_, S_f});
+            
             MX U_k = U(all, k);
-            cost += MX::mtimes({U_k.T(), F_, U_k});
+            cost += MX::mtimes({U_k.T(), F_, U_k}); // 控制输入惩罚,已停用
         } else {
-            cost += MX::mtimes({S_i1.T(), Q_, S_i1});
-
-            // 终端速度惩罚：迫使预测末端速度归零，避免到达终点后仍持续
-            // 给运动指令导致原地振荡。
-            if (has_global_traj_) {
-                MX v_ref = reference_k(Slice(4, 8));
-                MX v_i = X_k(Slice(4, 8));
-                MX w_i = X_k(3);
-                MX v_world_x = cos(w_i)*v_i(0) - sin(w_i)*v_i(1);
-                MX v_world_y = sin(w_i)*v_i(0) + cos(w_i)*v_i(1);
-                MX v_world_z = v_i(2);
-                MX v_world_w = v_i(3);
-                MX v_world = MX::vertcat({v_world_x, v_world_y, v_world_z, v_world_w});
-                MX v_err = v_world - v_ref;
-                cost += MX::mtimes({v_err.T(), W_v_, v_err});
-            }
+            cost += MX::mtimes({track_err.T(), Q_, track_err});
+            cost += MX::mtimes({S_f.T(), Q_f_, S_f});
         }
     }
 
@@ -525,6 +575,22 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
 
     // 初始状态约束
     opti_->subject_to(X(all, 0) == X_cur_param_);
+
+    // 制动不等式约束：保证预测轨迹在终点前能减速停下。
+    //   ||v_world_k||^2 <= 2 * a_brake * d_g_k
+    // d_g_k 为第 k 步预测位置到终点的直线距离，a_brake 为保守最大制动加速度。
+    for (int k = 0; k <= N_; ++k) {
+        MX X_k = X(all, k);
+        MX w_k = X_k(3);
+        MX v_k = X_k(Slice(4, 8));
+        MX v_world = MX::vertcat({
+            cos(w_k) * v_k(0) - sin(w_k) * v_k(1),
+            sin(w_k) * v_k(0) + cos(w_k) * v_k(1),
+            v_k(2)});
+        MX d_g = MX::norm_2(X_k(Slice(0, 3)) - goal_param_);
+        MX v_norm_sq = MX::dot(v_world, v_world);
+        opti_->subject_to(v_norm_sq <= 2.0 * a_brake_ * d_g);
+    }
 
     // 输入约束
     opti_->subject_to(u_min_ <= U(0, all) <= u_max_);
@@ -548,6 +614,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     built_dt_ = dt_;
     built_u_max_ = u_max_;
     built_w_max_ = w_max_;
+    built_a_brake_ = a_brake_;
     built_neighbor_count_ = neighbors.size();
     built_nearest_obs_num_ = nearest_obs_num_;
     built_ipopt_max_iter_ = ipopt_max_iter_;
@@ -577,18 +644,30 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
         return false;
     }
 
-    // 从最近路径点时间开始，对预测时域进行数值线性插值。参考轨迹只是
-    // 优化参数，不参与决策，因此无需把插值器嵌入 CasADi 符号图。
+    // 滚动子目标：沿弧长从最近投影点前推 lookahead_distance_。
+    // 全局轨迹只提供方向引导，整个预测时域跟踪同一个子目标点。
+    rolling_goal_ = selectRollingGoal(t);
+    if (!has_rolling_goal_) {
+        std::cerr << "[MPC] Failed to select rolling goal." << std::endl;
+        return false;
+    }
+
     std::vector<double> reference_values;
-    reference_values.reserve(8 * (N_ + 1));
+    reference_values.reserve(4 * (N_ + 1));
     for (int k = 0; k <= N_; ++k) {
-        const GlobalWaypoint reference = interpolateGlobalTrajectory(t + k * dt_);
-        reference_values.insert(reference_values.end(), {
-            reference.x, reference.y, reference.z, reference.yaw,
-            reference.vx, reference.vy, reference.vz, reference.vyaw});
+        reference_values.insert(reference_values.end(),
+                                {rolling_goal_.x, rolling_goal_.y,
+                                 rolling_goal_.z, 0.0});
     }
     opti_->set_value(reference_param_,
-                     casadi::DM::reshape(DM(reference_values), 8, N_ + 1));
+                     casadi::DM::reshape(DM(reference_values), 4, N_ + 1));
+
+    // 终点位置参数（制动约束用）
+    DM goal_dm = DM::zeros(3, 1);
+    goal_dm(0) = global_traj_.back().x;
+    goal_dm(1) = global_traj_.back().y;
+    goal_dm(2) = global_traj_.back().z;
+    opti_->set_value(goal_param_, goal_dm);
 
     // 初始状态参数
     vector<double> cur_state_vec(current_states.data(), current_states.data() + 8);
@@ -609,21 +688,14 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
                          casadi::DM::reshape(DM(nb_vec), 8, N_ + 1));
     }
 
-    // 查询点：固定用"期望物理位置"（全局参考点 + 自身编队偏移），不随上一轮
-    // 解变化。若用上一轮优化轨迹作为查询点，障碍物参数会随解抖动，形成
-    // "查询点→障碍参数→解→查询点"的正反馈，导致轨迹杂乱；参考点缓慢变化，
-    // 障碍参数稳定，MPC 沿全局路径保持平滑，仅在预测轨迹逼近障碍时被排斥。
-    Eigen::Vector3d query_offset = Eigen::Vector3d::Zero();
-    auto off_it = formation_offsets_.find(my_id_);
-    if (off_it != formation_offsets_.end() && off_it->second.size() >= 3) {
-        query_offset = Eigen::Vector3d(off_it->second[0], off_it->second[1],
-                                       off_it->second[2]);
-    }
+    // 查询点：固定用滚动子目标，不随上一轮解变化。若用上一轮优化轨迹作为
+    // 查询点，障碍物参数会随解抖动，形成"查询点→障碍参数→解→查询点"的
+    // 正反馈，导致轨迹杂乱；子目标缓慢变化，障碍参数稳定，MPC 沿全局路径
+    // 保持平滑，仅在预测轨迹逼近障碍时被排斥。
     std::vector<Eigen::Vector3d> query_pts(N_ + 1);
     for (int k = 0; k <= N_; ++k) {
-        const GlobalWaypoint reference = interpolateGlobalTrajectory(t + k * dt_);
-        query_pts[k] = Eigen::Vector3d(reference.x, reference.y, reference.z) +
-                       query_offset;
+        query_pts[k] = Eigen::Vector3d(rolling_goal_.x, rolling_goal_.y,
+                                       rolling_goal_.z);
     }
 
     // 最近点重查询重规划循环：查询点固定为参考位置，若因地图更新导致最近点

@@ -75,6 +75,9 @@ link_directories(/usr/local/lib)
 add_executable(random_obs src/random_obs.cpp)
 target_link_libraries(random_obs ${catkin_LIBRARIES})
 
+add_executable(fixed_obs src/fixed_obs.cpp)
+target_link_libraries(fixed_obs ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+
 add_executable(astar_node src/astar_node.cpp src/a_star.cpp src/grid_map.cpp src/raycast.cpp)
 target_link_libraries(astar_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES})
 
@@ -92,7 +95,7 @@ add_executable(dwa_node src/dwa_node.cpp src/dwa_planner.cpp src/sdf_map.cpp src
 # 把外部库也链接到这个可执行文件
 target_link_libraries(dwa_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES})
 
-add_executable(kino_astar_node src/kino_astar_node.cpp src/kino_astar.cpp src/grid_map.cpp src/raycast.cpp)
+add_executable(kino_astar_node src/kino_astar_node.cpp src/kino_astar.cpp src/formation_config.cpp src/grid_map.cpp src/raycast.cpp)
 target_link_libraries(kino_astar_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES})
 add_dependencies(kino_astar_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 

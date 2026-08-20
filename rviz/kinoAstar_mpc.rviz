@@ -69,10 +69,18 @@ Visualization Manager:
       Value: true
     - Class: rviz/Marker
       Enabled: true
-      Marker Topic: /kino_astar/goal_marker
+      Marker Topic: /uav0/kino_astar/goal_marker
       Name: GoalPoint
       Namespaces:
-        {}
+        kino_astar/goal: true
+      Queue Size: 100
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /uav0/mpc_sub_goal_marker
+      Name: subgoal
+      Namespaces:
+        mpc_sub_goal: true
       Queue Size: 100
       Value: true
     - Alpha: 1
@@ -128,27 +136,27 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.10000000149011612
           Style: Boxes
-          Topic: /grid_map/occupancy_inflate
+          Topic: /uav0/grid_map/occupancy_inflate
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
           Value: false
         - Class: rviz/Marker
           Enabled: true
-          Marker Topic: /kino_astar/path_marker
+          Marker Topic: /uav0/kino_astar/path_marker
           Name: kinoA*_path_marker
           Namespaces:
-            {}
+            kino_astar/path: true
           Queue Size: 100
           Value: true
         - Class: rviz/Marker
-          Enabled: true
-          Marker Topic: /kino_astar_node/kino_astar_path_nodes
+          Enabled: false
+          Marker Topic: /uav0_kino_astar_node/kino_astar_path_nodes
           Name: kinoA*_path_nodes
           Namespaces:
             {}
           Queue Size: 100
-          Value: true
+          Value: false
       Enabled: true
       Name: kinoA*
     - Class: rviz/Group
@@ -218,7 +226,7 @@ Visualization Manager:
               Size (Pixels): 3
               Size (m): 0.10000000149011612
               Style: Boxes
-              Topic: /sdf_map/occupancy_inflate
+              Topic: /uav0/sdf_map/occupancy_inflate
               Unreliable: false
               Use Fixed Frame: true
               Use rainbow: true
@@ -228,7 +236,8 @@ Visualization Manager:
               Marker Topic: /uav0/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -274,7 +283,7 @@ Visualization Manager:
           Radius: 0.029999999329447746
           Shaft Diameter: 0.10000000149011612
           Shaft Length: 0.10000000149011612
-          Topic: /uav0/traveled_path
+          Topic: /uav1/traveled_path
           Unreliable: false
           Value: true
         - Class: rviz/Group
@@ -302,14 +311,14 @@ Visualization Manager:
               Size (Pixels): 3
               Size (m): 0.10000000149011612
               Style: Boxes
-              Topic: /sdf_map/occupancy_inflate
+              Topic: /uav1/sdf_map/occupancy_inflate
               Unreliable: false
               Use Fixed Frame: true
               Use rainbow: true
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav1/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
                 {}
@@ -358,7 +367,7 @@ Visualization Manager:
           Radius: 0.029999999329447746
           Shaft Diameter: 0.10000000149011612
           Shaft Length: 0.10000000149011612
-          Topic: /uav0/traveled_path
+          Topic: /uav2/traveled_path
           Unreliable: false
           Value: true
         - Class: rviz/Group
@@ -386,14 +395,14 @@ Visualization Manager:
               Size (Pixels): 3
               Size (m): 0.10000000149011612
               Style: Boxes
-              Topic: /sdf_map/occupancy_inflate
+              Topic: /uav2/sdf_map/occupancy_inflate
               Unreliable: false
               Use Fixed Frame: true
               Use rainbow: true
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav2/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
                 {}
@@ -442,7 +451,7 @@ Visualization Manager:
           Radius: 0.029999999329447746
           Shaft Diameter: 0.10000000149011612
           Shaft Length: 0.10000000149011612
-          Topic: /uav0/traveled_path
+          Topic: /uav3/traveled_path
           Unreliable: false
           Value: true
         - Class: rviz/Group
@@ -470,14 +479,14 @@ Visualization Manager:
               Size (Pixels): 3
               Size (m): 0.10000000149011612
               Style: Boxes
-              Topic: /sdf_map/occupancy_inflate
+              Topic: /uav3/sdf_map/occupancy_inflate
               Unreliable: false
               Use Fixed Frame: true
               Use rainbow: true
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav3/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
                 {}
@@ -526,7 +535,7 @@ Visualization Manager:
           Radius: 0.029999999329447746
           Shaft Diameter: 0.10000000149011612
           Shaft Length: 0.10000000149011612
-          Topic: /uav0/traveled_path
+          Topic: /uav4/traveled_path
           Unreliable: false
           Value: true
         - Class: rviz/Group
@@ -554,14 +563,14 @@ Visualization Manager:
               Size (Pixels): 3
               Size (m): 0.10000000149011612
               Style: Boxes
-              Topic: /sdf_map/occupancy_inflate
+              Topic: /uav4/sdf_map/occupancy_inflate
               Unreliable: false
               Use Fixed Frame: true
               Use rainbow: true
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav4/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
                 {}
@@ -610,7 +619,7 @@ Visualization Manager:
           Radius: 0.029999999329447746
           Shaft Diameter: 0.10000000149011612
           Shaft Length: 0.10000000149011612
-          Topic: /uav0/traveled_path
+          Topic: /uav5/traveled_path
           Unreliable: false
           Value: true
         - Class: rviz/Group
@@ -638,14 +647,14 @@ Visualization Manager:
               Size (Pixels): 3
               Size (m): 0.10000000149011612
               Style: Boxes
-              Topic: /sdf_map/occupancy_inflate
+              Topic: /uav5/sdf_map/occupancy_inflate
               Unreliable: false
               Use Fixed Frame: true
               Use rainbow: true
               Value: false
             - Class: rviz/Marker
               Enabled: true
-              Marker Topic: /uav0/mpc_predicted_path_marker
+              Marker Topic: /uav5/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
                 {}
@@ -683,7 +692,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 31.937808990478516
+      Distance: 31.4779052734375
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -691,17 +700,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -12.712483406066895
-        Y: 6.114252090454102
-        Z: -7.300710201263428
+        X: -15.171981811523438
+        Y: 2.7007153034210205
+        Z: -8.876334190368652
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.2697969675064087
+      Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
-      Yaw: 4.703566074371338
+      Yaw: 4.72356653213501
     Saved: ~
 Window Geometry:
   Displays:

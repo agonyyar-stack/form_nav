@@ -50,7 +50,9 @@ private: //存储了 MPC 算法运行时的配置和状态
     int num; //无人机数量
     
     //权重矩阵
-    DM Q_, F_, W_v_, R_d_; 
+    DM Q_, F_, R_d_;
+    // 编队误差权重（与全局轨迹跟踪权重 Q_ 独立，避免两者耦合打架）
+    DM Q_f_;
 
     //运动学方程参数
     double Lx, Kx;
@@ -62,8 +64,6 @@ private: //存储了 MPC 算法运行时的配置和状态
 
     // 自身 ID
     int my_id_;
-    // 是否直接跟踪全局轨迹（虚拟领航者）
-    bool is_tracked_;
     // 所有无人机的编队偏移量 {id → [x, y, z, yaw]}
     std::map<int, std::vector<double>> formation_offsets_;
 
@@ -96,9 +96,10 @@ private: //存储了 MPC 算法运行时的配置和状态
 
     // --- Opti 复用（第三步：参数化障碍物点 + 重规划循环） ---
     std::unique_ptr<casadi::Opti> opti_;        // 优化问题实例，首次 solve 构建后复用
-    MX reference_param_;                        // 全局参考轨迹参数 (8, N_+1)
+    MX reference_param_;                        // 滚动子目标参考参数 (4, N_+1) [x,y,z,yaw]，各列相同
     MX X_cur_param_;                            // 当前状态参数 (8, 1)
     MX obstacle_param_;                         // 最近障碍点参数 (3*M, N_+1)
+    MX goal_param_;                             // 终点位置参数 (3, 1)，用于制动约束
     std::map<int, MX> neighbor_params_;         // 邻居预测轨迹参数
     bool has_last_solution_;                    // 是否已有上一轮解（用于热启动）
     Eigen::MatrixXd last_pred_x_;               // 上一轮预测状态 (8, N_+1)
@@ -109,6 +110,7 @@ private: //存储了 MPC 算法运行时的配置和状态
     double built_dt_;
     double built_u_max_;
     double built_w_max_;
+    double built_a_brake_;
     size_t built_neighbor_count_;
     int built_nearest_obs_num_;
     int built_ipopt_max_iter_;
@@ -127,6 +129,12 @@ private: //存储了 MPC 算法运行时的配置和状态
     // 全局轨迹
     std::vector<GlobalWaypoint> global_traj_;
     bool has_global_traj_;
+    // 滚动子目标：沿弧长前瞻选取，全局轨迹仅提供方向引导
+    std::vector<double> path_arclength_;  // 与 global_traj_ 同步的累积弧长 (m)
+    double lookahead_distance_;           // 子目标前瞻距离 (m)
+    double a_brake_;                      // 制动加速度 (m/s^2)，默认 0.8*u_max
+    GlobalWaypoint rolling_goal_;         // 最近一次求解使用的子目标
+    bool has_rolling_goal_;
 public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     Mpc();
     ~Mpc();
@@ -135,8 +143,6 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
 
     /// 设置自身 ID
     void setMyId(int id) { my_id_ = id; }
-    /// 设置是否直接跟踪全局轨迹
-    void setTracked(bool tracked) { is_tracked_ = tracked; }
     /// 设置编队偏移量表
     void setFormationOffsets(const std::map<int, std::vector<double>>& offsets) { formation_offsets_ = offsets; }
 
@@ -145,10 +151,14 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setPredictionHorizon(int N) { N_ = N; }
     /// 设置时间步长 (s)
     void setTimeStep(double dt) { dt_ = dt; }
-    /// 设置线速度/线加速度上限, 自动更新下限
-    void setMaxVelocity(double u_max) { u_max_ = u_max; u_min_ = -u_max; }
+    /// 设置线速度/线加速度上限, 自动更新下限与默认制动加速度
+    void setMaxVelocity(double u_max) { u_max_ = u_max; u_min_ = -u_max; a_brake_ = 0.8 * u_max_; }
     /// 设置角速度/角加速度上限, 自动更新下限
     void setMaxAngularVelocity(double w_max) { w_max_ = w_max; w_min_ = -w_max; }
+    /// 设置滚动子目标前瞻距离 (m)
+    void setLookaheadDistance(double d) { lookahead_distance_ = d; }
+    /// 设置制动加速度 (m/s^2)，<=0 时取默认 0.8*u_max
+    void setBrakeAcceleration(double a) { a_brake_ = a > 0.0 ? a : 0.8 * u_max_; }
     /// 设置障碍物安全距离 (m)
     void setObstacleSafeDistance(double d) { d_safe_oa = d; }
     /// 设置障碍物临界距离 (m)
@@ -161,10 +171,14 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
     /// 设置相互碰撞惩罚权重
     void setCollisionWeight(double w) { Wc = w; }
-    /// 设置终端速度惩罚权重 (对角矩阵)
-    void setTerminalVelocityWeight(const DM& w) { W_v_ = w; }
+    /// 设置控制输入惩罚权重 (对角矩阵，原 F_)
+    void setControlInputWeight(const DM& w) { F_ = w; }
     /// 设置控制增量惩罚权重 (对角矩阵)
     void setControlIncrementWeight(const DM& w) { R_d_ = w; }
+    /// 设置全局轨迹跟踪权重 (对角矩阵，原 Q_)
+    void setTrackingWeight(const DM& w) { Q_ = w; }
+    /// 设置编队误差权重 (对角矩阵，独立于全局轨迹跟踪权重)
+    void setFormationErrorWeight(const DM& w) { Q_f_ = w; }
 
     /// 设置 ESDF CasADi 插值器
     void setEsdf(EsdfCasadi* esdf) { esdf_ptr_ = esdf; }
@@ -193,6 +207,9 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
 
     /// 对全局参考轨迹进行数值线性插值，超出时间范围时保持首/末点
     GlobalWaypoint interpolateGlobalTrajectory(double t) const;
+
+    /// 沿轨迹弧长从 t0 前推 lookahead_distance_ 选取滚动子目标
+    GlobalWaypoint selectRollingGoal(double t0);
 
     ErrorTerms formationError(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states); //编队误差
 
@@ -223,6 +240,9 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     const std::vector<Eigen::Vector3d>& getLastObstaclePoints() const {
         return last_obstacle_pts_;
     }
+
+    /// 最近一次求解使用的滚动子目标（可视化用）
+    const GlobalWaypoint& getLastRollingGoal() const { return rolling_goal_; }
 };
 
 #endif

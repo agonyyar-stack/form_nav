@@ -24,7 +24,6 @@
 #include "form_nav/esdf_casadi.h"
 #include "form_nav/kd_tree_map.h"
 #include "form_nav/sdf_map.h"
-#include "form_nav/GlobalPathProgress.h"
 #include "form_nav/GlobalTrajectory.h"
 #include "form_nav/PredictedTrajectory.h"
 
@@ -37,8 +36,8 @@ int MPC_HORIZON = 10;
 double MPC_DT = 0.05;
 double NEIGHBOR_TRAJECTORY_TIMEOUT = 0.3;
 double NEIGHBOR_FUTURE_TOLERANCE = 0.05;
-double GLOBAL_PROGRESS_TIMEOUT = 0.3;
 const double LOOP_RATE = 20.0;
+double a_brake_eff = 0.0;  // 制动加速度（与 MPC 内部一致，用于当前状态可行性预检）
 
 std::unique_ptr<tf2_ros::Buffer> tf_buffer_ptr;
 std::unique_ptr<tf2_ros::TransformListener> tf_listener_ptr;
@@ -50,9 +49,9 @@ ros::Publisher predicted_path_pub;
 ros::Publisher share_path_pub;
 ros::Publisher predicted_path_viz_pub;
 ros::Publisher traveled_path_pub;
-ros::Publisher global_progress_pub;
 ros::Publisher queried_obstacles_pub;  // 第三步：最近查询障碍点可视化
 ros::Publisher obstacle_cloud_pub;     // 第三步：KD-tree 中的障碍点云可视化
+ros::Publisher sub_goal_pub;           // 滚动子目标可视化
 
 // --- 状态量 ---
 // 显式初始化，避免首个传感器消息到达前把未定义数据送入求解器。
@@ -140,16 +139,6 @@ void obstacleCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& msg) {
 std::vector<GlobalWaypoint> global_traj;
 bool global_traj_received = false;
 uint32_t current_trajectory_id = 0;
-Eigen::Vector4d my_formation_offset = Eigen::Vector4d::Zero();
-
-struct GlobalProgressCache {
-    ros::Time stamp;
-    uint32_t trajectory_id = 0;
-    double path_time = 0.0;
-    bool received = false;
-};
-
-GlobalProgressCache global_progress;
 
 // 到达终点后的悬停锁定标志：一旦置位就持续保持悬停，不再回到 MPC 求解，
 // 避免在终点阈值附近悬停/振荡反复切换。收到新的全局轨迹时解除锁定，
@@ -213,7 +202,6 @@ void globalTrajCallback(const form_nav::GlobalTrajectory::ConstPtr& msg) {
     global_traj_received = true;
     current_trajectory_id = msg->trajectory_id;
     last_global_idx = 0;
-    global_progress = GlobalProgressCache{};
     neighbor_trajectories.clear();
     // 新轨迹意味着新的任务：解除到达悬停锁定，允许再次起飞。
     arrived_hold_ = false;
@@ -223,7 +211,8 @@ void globalTrajCallback(const form_nav::GlobalTrajectory::ConstPtr& msg) {
 }
 
 // ========== 在最近点附近窗口内搜索，返回时间 ==========
-double findClosestWaypointTime(const Eigen::Vector3d& virtual_center) {
+// 分布式规划：query_pos 是本机物理位置，投影到本机物理轨迹上取路径时间。
+double findClosestWaypointTime(const Eigen::Vector3d& query_pos) {
     if (global_traj.empty()) return 0.0;
 
     const int win_back = 3, win_forward = 30;    // 搜索窗口: [last-3, last+30]
@@ -234,9 +223,9 @@ double findClosestWaypointTime(const Eigen::Vector3d& virtual_center) {
     double min_dist = 1e9;
     int closest = lo;
     for (int i = lo; i <= hi; ++i) {
-        double dx = virtual_center.x() - global_traj[i].x;
-        double dy = virtual_center.y() - global_traj[i].y;
-        double dz = virtual_center.z() - global_traj[i].z;
+        double dx = query_pos.x() - global_traj[i].x;
+        double dy = query_pos.y() - global_traj[i].y;
+        double dz = query_pos.z() - global_traj[i].z;
         double d2 = dx*dx + dy*dy + dz*dz;
         if (d2 < min_dist) {
             min_dist = d2;
@@ -247,9 +236,9 @@ double findClosestWaypointTime(const Eigen::Vector3d& virtual_center) {
     // 如果最近点落在窗口边界附近, 扩展一次全量搜索做安全重置
     if (closest == hi || closest == lo) {
         for (size_t i = 0; i < global_traj.size(); ++i) {
-            double dx = virtual_center.x() - global_traj[i].x;
-            double dy = virtual_center.y() - global_traj[i].y;
-            double dz = virtual_center.z() - global_traj[i].z;
+            double dx = query_pos.x() - global_traj[i].x;
+            double dy = query_pos.y() - global_traj[i].y;
+            double dz = query_pos.z() - global_traj[i].z;
             double d2 = dx*dx + dy*dy + dz*dz;
             if (d2 < min_dist) {
                 min_dist = d2;
@@ -262,32 +251,6 @@ double findClosestWaypointTime(const Eigen::Vector3d& virtual_center) {
     closest = std::max(closest, last_global_idx);
     last_global_idx = closest;
     return global_traj[closest].t;
-}
-
-void globalProgressCallback(const form_nav::GlobalPathProgress::ConstPtr& msg) {
-    const ros::Time now = ros::Time::now();
-    const double age = (now - msg->header.stamp).toSec();
-    if (msg->header.stamp.isZero() ||
-        msg->trajectory_id != current_trajectory_id ||
-        !std::isfinite(msg->path_time) || global_traj.empty() ||
-        msg->path_time < global_traj.front().t ||
-        msg->path_time > global_traj.back().t ||
-        age > GLOBAL_PROGRESS_TIMEOUT || age < -NEIGHBOR_FUTURE_TOLERANCE) {
-        ROS_WARN_THROTTLE(2.0, "%s: rejected global path progress",
-                          UAV_NAME.c_str());
-        return;
-    }
-    if (global_progress.received &&
-        msg->path_time < global_progress.path_time) {
-        ROS_WARN_THROTTLE(2.0, "%s: rejected decreasing global path progress",
-                          UAV_NAME.c_str());
-        return;
-    }
-
-    global_progress.stamp = msg->header.stamp;
-    global_progress.trajectory_id = msg->trajectory_id;
-    global_progress.path_time = msg->path_time;
-    global_progress.received = true;
 }
 
 // ========== MAVROS 回调 ==========
@@ -517,9 +480,10 @@ void publishHoldPositionSetpoint(const ros::Time& stamp) {
     geometry_msgs::PoseStamped hold_pose;
     hold_pose.header.stamp = stamp;
     hold_pose.header.frame_id = WORLD_FRAME;
-    hold_pose.pose.position.x = global_traj.back().x + my_formation_offset(0);
-    hold_pose.pose.position.y = global_traj.back().y + my_formation_offset(1);
-    hold_pose.pose.position.z = global_traj.back().z + my_formation_offset(2);
+    // 分布式规划：轨迹末端已是本机物理目标，不再叠加编队偏移。
+    hold_pose.pose.position.x = global_traj.back().x;
+    hold_pose.pose.position.y = global_traj.back().y;
+    hold_pose.pose.position.z = global_traj.back().z;
     tf2::Quaternion hold_yaw;
     hold_yaw.setRPY(0.0, 0.0, current_mpc_state(3));
     hold_pose.pose.orientation = tf2::toMsg(hold_yaw);
@@ -555,7 +519,7 @@ void publishStationaryPrediction(const ros::Time& stamp) {
 }
 
 // ========== 主控制循环 ==========
-void controlLoop(const ros::TimerEvent&, bool is_tracked) {
+void controlLoop(const ros::TimerEvent&) {
     // 飞控未就绪（未解锁 / 未进入 OFFBOARD）时不发布任何指令
     if (!vehicle_ready) {
         ROS_INFO_THROTTLE(2.0,
@@ -575,52 +539,21 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
     }
 
     const ros::Time solve_stamp = ros::Time::now();
-    double t0 = 0.0;
-    if (is_tracked) {
-        const Eigen::Vector3d virtual_center(
-            current_mpc_state(0) - my_formation_offset(0),
-            current_mpc_state(1) - my_formation_offset(1),
-            current_mpc_state(2) - my_formation_offset(2));
-        t0 = findClosestWaypointTime(virtual_center);
-
-        form_nav::GlobalPathProgress progress_msg;
-        progress_msg.header.stamp = solve_stamp;
-        progress_msg.header.frame_id = WORLD_FRAME;
-        progress_msg.trajectory_id = current_trajectory_id;
-        progress_msg.path_time = t0;
-        global_progress_pub.publish(progress_msg);
-    } else {
-        const double progress_age =
-            global_progress.received
-                ? (solve_stamp - global_progress.stamp).toSec()
-                : std::numeric_limits<double>::infinity();
-        if (!global_progress.received ||
-            global_progress.trajectory_id != current_trajectory_id ||
-            progress_age > GLOBAL_PROGRESS_TIMEOUT ||
-            progress_age < -NEIGHBOR_FUTURE_TOLERANCE) {
-            ROS_WARN_THROTTLE(1.0,
-                              "%s: waiting for trajectory %u global progress",
-                              UAV_NAME.c_str(), current_trajectory_id);
-            publishHoldCommand();
-            return;
-        }
-        t0 = global_progress.path_time;
-    }
+    // 分布式规划：每机在自身的物理轨迹上投影当前物理位置得到路径时间，
+    // 不再依赖 leader 发布的全局进度。
+    const Eigen::Vector3d current_pos(
+        current_mpc_state(0), current_mpc_state(1), current_mpc_state(2));
+    const double t0 = findClosestWaypointTime(current_pos);
 
     // ========== 到达终点检测：锁定悬停，避免原地振荡 ==========
-    // 每架无人机的停靠目标是"轨迹末端 + 自身编队偏移 M_i"（与 formationError
-    // 中的 virtual center 定义一致），因此用 本机位置 - 自身偏移 去比轨迹末端。
+    // 每架无人机的停靠目标就是自己轨迹的末端（物理坐标）。
     // 一旦满足条件即锁定（arrived_hold_），之后持续悬停不再回 MPC 求解，
     // 避免在阈值附近悬停/振荡反复切换；收到新轨迹时由 globalTrajCallback 解锁。
     // 终点距离/速度在这里提前计算，用于锁定判定。
-    const Eigen::Vector3d virtual_center(
-        current_mpc_state(0) - my_formation_offset(0),
-        current_mpc_state(1) - my_formation_offset(1),
-        current_mpc_state(2) - my_formation_offset(2));
     const Eigen::Vector3d traj_end(global_traj.back().x,
                                    global_traj.back().y,
                                    global_traj.back().z);
-    const double end_dist = (virtual_center - traj_end).norm();
+    const double end_dist = (current_pos - traj_end).norm();
     const double speed = std::hypot(vel_world_x, vel_world_y);
 
     if (arrived_hold_) {
@@ -646,6 +579,21 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
     current_mpc_state(5) = -sin_psi * vel_world_x + cos_psi * vel_world_y;
     current_mpc_state(6) = vel_world_z;
     current_mpc_state(7) = vel_body_w;
+
+    // 制动可行性预检：当前状态须满足 MPC 制动约束 ||v_world||^2 <= 2*a_brake*d_g，
+    // 否则 k=0 约束必然不可行，直接悬停（阈值与 MPC 内部 a_brake_eff 一致）。
+    const double cur_speed_sq = vel_world_x * vel_world_x +
+                                vel_world_y * vel_world_y +
+                                vel_world_z * vel_world_z;
+    if (cur_speed_sq > 2.0 * a_brake_eff * end_dist) {
+        ROS_WARN_THROTTLE(0.5,
+                          "%s: current speed exceeds braking feasibility "
+                          "(v=%.2f m/s, d_g=%.2f m), holding.",
+                          UAV_NAME.c_str(), std::sqrt(cur_speed_sq), end_dist);
+        publishHoldCommand();
+        publishStationaryPrediction(solve_stamp);
+        return;
+    }
 
     // 第三步：近距碰撞安全兜底 —— 当前点已进入临界距离时停止求解并悬停，
     // 避免在代价势垒梯度很大的区间内求解产生异常指令。
@@ -839,6 +787,28 @@ void controlLoop(const ros::TimerEvent&, bool is_tracked) {
             obs_marker.points.push_back(p);
         }
         queried_obstacles_pub.publish(obs_marker);
+
+        // --- 滚动子目标可视化 ---
+        visualization_msgs::Marker sub_goal_marker;
+        sub_goal_marker.header.frame_id = WORLD_FRAME;
+        sub_goal_marker.header.stamp = ros::Time::now();
+        sub_goal_marker.ns = "mpc_sub_goal";
+        sub_goal_marker.id = 0;
+        sub_goal_marker.type = visualization_msgs::Marker::SPHERE;
+        sub_goal_marker.action = visualization_msgs::Marker::ADD;
+        sub_goal_marker.pose.orientation.w = 1.0;
+        const GlobalWaypoint& sub_goal = mpc_ptr->getLastRollingGoal();
+        sub_goal_marker.pose.position.x = sub_goal.x;
+        sub_goal_marker.pose.position.y = sub_goal.y;
+        sub_goal_marker.pose.position.z = sub_goal.z;
+        sub_goal_marker.scale.x = 0.25;
+        sub_goal_marker.scale.y = 0.25;
+        sub_goal_marker.scale.z = 0.25;
+        sub_goal_marker.color.a = 0.9;
+        sub_goal_marker.color.r = 1.0;
+        sub_goal_marker.color.g = 0.8;
+        sub_goal_marker.color.b = 0.0;
+        sub_goal_pub.publish(sub_goal_marker);
     } else {
         ROS_WARN_THROTTLE(1.0, "%s:MPC failed, holding.", UAV_NAME.c_str());
         publishHoldCommand();
@@ -865,6 +835,8 @@ int main(int argc, char **argv) {
     double d_crit_oa = nh_private.param<double>("mpc/d_critical_oa", 0.3);
     double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.3);
     double w_ca      = nh_private.param<double>("mpc/w_ca", 1000.0);
+    double w_form    = nh_private.param<double>("mpc/w_form", 2000.0);
+    double w_track   = nh_private.param<double>("mpc/w_track", 20000.0);
     int nearest_obs_num = nh_private.param<int>("mpc/nearest_obs_num", 3);
     double drone_radius = nh_private.param<double>("mpc/drone_radius", 0.35);
     double w_oa         = nh_private.param<double>("mpc/w_oa", 30000.0);
@@ -883,8 +855,9 @@ int main(int argc, char **argv) {
         nh_private.param<std::string>("cloud_topic", "/map_generator/global_cloud");
     double neighbor_timeout          = nh_private.param<double>("communication/neighbor_trajectory_timeout", 0.3);
     double neighbor_future_tolerance = nh_private.param<double>("communication/neighbor_future_tolerance", 0.05);
-    double progress_timeout          = nh_private.param<double>("global_progress/timeout", 0.3);
-    double w_terminal_vel            = nh_private.param<double>("mpc/w_terminal_vel", 2000.0);
+    double lookahead_distance        = nh_private.param<double>("mpc/lookahead_distance", 2.0);
+    double brake_accel               = nh_private.param<double>("mpc/a_brake", 0.0);
+    double w_u                       = nh_private.param<double>("mpc/w_u", 100.0);
     double w_du                      = nh_private.param<double>("mpc/w_du", 100.0);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
         throw std::runtime_error(
@@ -895,14 +868,26 @@ int main(int argc, char **argv) {
         throw std::runtime_error(
             "communication/neighbor_future_tolerance must be non-negative");
     }
-    if (!std::isfinite(progress_timeout) || progress_timeout <= 0.0) {
-        throw std::runtime_error("global_progress/timeout must be positive");
-    }
     if (!std::isfinite(w_du) || w_du < 0.0) {
         throw std::runtime_error("mpc/w_du must be non-negative");
     }
+    if (!std::isfinite(w_u) || w_u < 0.0) {
+        throw std::runtime_error("mpc/w_u must be non-negative");
+    }
     if (!std::isfinite(w_ca) || w_ca < 0.0) {
         throw std::runtime_error("mpc/w_ca must be non-negative");
+    }
+    if (!std::isfinite(w_form) || w_form < 0.0) {
+        throw std::runtime_error("mpc/w_form must be non-negative");
+    }
+    if (!std::isfinite(w_track) || w_track < 0.0) {
+        throw std::runtime_error("mpc/w_track must be non-negative");
+    }
+    if (!std::isfinite(lookahead_distance) || lookahead_distance <= 0.0) {
+        throw std::runtime_error("mpc/lookahead_distance must be positive");
+    }
+    if (!std::isfinite(brake_accel) || brake_accel < 0.0) {
+        throw std::runtime_error("mpc/a_brake must be non-negative");
     }
     if (nearest_obs_num <= 0) {
         throw std::runtime_error("mpc/nearest_obs_num must be positive");
@@ -940,7 +925,6 @@ int main(int argc, char **argv) {
     obstacle_hold_dist = hold_dist;
     NEIGHBOR_TRAJECTORY_TIMEOUT = neighbor_timeout;
     NEIGHBOR_FUTURE_TOLERANCE = neighbor_future_tolerance;
-    GLOBAL_PROGRESS_TIMEOUT = progress_timeout;
     UAV_NAME = "uav" + std::to_string(my_id);
     LOCAL_FRAME = nh_private.param<std::string>("local_frame", UAV_NAME + "/map");
 
@@ -949,20 +933,15 @@ int main(int argc, char **argv) {
 
     const FormationConfig formation = FormationConfig::load(
         nh, formation_config_namespace, my_id);
-    const bool is_tracked = formation.leader_access;
     const std::vector<int>& neighbor_ids = formation.neighbor_ids;
     required_neighbor_ids = neighbor_ids;
-    const auto own_offset = formation.offsets.at(my_id);
-    my_formation_offset = Eigen::Vector4d(
-        own_offset[0], own_offset[1], own_offset[2], own_offset[3]);
-    ROS_INFO("%s: leader_access=%d, neighbors=%zu, offsets=%zu",
-             UAV_NAME.c_str(), is_tracked,
+    ROS_INFO("%s: neighbors=%zu, offsets=%zu",
+             UAV_NAME.c_str(),
              neighbor_ids.size(), formation.offsets.size());
 
     // --- MPC 初始化 ---
     mpc_ptr.reset(new Mpc());
     mpc_ptr->setMyId(my_id);
-    mpc_ptr->setTracked(is_tracked);
     mpc_ptr->setFormationOffsets(formation.offsets);
 
     mpc_ptr->setPredictionHorizon(N);
@@ -982,22 +961,33 @@ int main(int argc, char **argv) {
     mpc_ptr->setIpoptTol(ipopt_tol);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
     mpc_ptr->setCollisionWeight(w_ca);
-    mpc_ptr->setTerminalVelocityWeight(
-        DM::diag(DM{w_terminal_vel, w_terminal_vel, w_terminal_vel,
-                    w_terminal_vel / 4.0}));
+    mpc_ptr->setLookaheadDistance(lookahead_distance);
+    mpc_ptr->setBrakeAcceleration(brake_accel);
+    a_brake_eff = brake_accel > 0.0 ? brake_accel : 0.8 * u_max;
+    mpc_ptr->setControlInputWeight(
+        DM::diag(DM{w_u, w_u, w_u, w_u}));
     mpc_ptr->setControlIncrementWeight(
         DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
+    // 编队误差权重：独立于全局轨迹跟踪权重（默认小一个数量级），
+    // 相对比例与 Q_ 保持一致（x:y:z:yaw = 1:1:0.5:0.005）。
+    mpc_ptr->setFormationErrorWeight(
+        DM::diag(DM{w_form, w_form, w_form / 2.0, w_form / 200.0}));
+    // 全局轨迹跟踪权重（原 Q_）：相对比例与默认一致（x:y:z:yaw = 1:1:0.5:0.005）
+    mpc_ptr->setTrackingWeight(
+        DM::diag(DM{w_track, w_track, w_track / 2.0, w_track / 200.0}));
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
              "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f, w_ca=%.2f, "
-             "nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, beta=%.2f, "
+             "w_form=%.2f, w_track=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, beta=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
-             "neighbor_timeout=%.3f, future_tolerance=%.3f",
+             "neighbor_timeout=%.3f, future_tolerance=%.3f, "
+             "lookahead=%.2f, a_brake=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_oa, d_crit_oa, d_safe_ca, w_ca,
+             d_safe_oa, d_crit_oa, d_safe_ca, w_ca, w_form, w_track,
              nearest_obs_num, drone_radius, w_oa, obs_beta, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
-             NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE);
+             NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
+             lookahead_distance, a_brake_eff);
 
     // 第一阶段不使用障碍物代价，暂时停用 ESDF 地图初始化；原代码保留。
 #if 0
@@ -1019,14 +1009,6 @@ int main(int argc, char **argv) {
     // 全局轨迹订阅
     ros::Subscriber global_traj_sub = nh.subscribe<form_nav::GlobalTrajectory>(
         "/kino_astar/trajectory", 1, globalTrajCallback);
-    ros::Subscriber global_progress_sub;
-    if (is_tracked) {
-        global_progress_pub = nh.advertise<form_nav::GlobalPathProgress>(
-            "/formation/global_path_progress", 1);
-    } else {
-        global_progress_sub = nh.subscribe<form_nav::GlobalPathProgress>(
-            "/formation/global_path_progress", 1, globalProgressCallback);
-    }
 
     // 第三步：障碍物点云（仿真阶段为全局真值点云，后续可换感知 local cloud）
     ros::Subscriber obstacle_cloud_sub = nh.subscribe<sensor_msgs::PointCloud2>(
@@ -1054,6 +1036,8 @@ int main(int argc, char **argv) {
         "/" + UAV_NAME + "/mpc_queried_obstacles", 10);
     obstacle_cloud_pub = nh.advertise<sensor_msgs::PointCloud2>(
         "/" + UAV_NAME + "/obstacle_cloud", 10);
+    sub_goal_pub = nh.advertise<visualization_msgs::Marker>(
+        "/" + UAV_NAME + "/mpc_sub_goal_marker", 10);
 
     ros::Rate rate(LOOP_RATE);
 
@@ -1065,8 +1049,8 @@ int main(int argc, char **argv) {
     // 定时器
     ros::Timer timer = nh.createTimer(
         ros::Duration(1.0 / LOOP_RATE),
-        [is_tracked](const ros::TimerEvent& event) {
-            controlLoop(event, is_tracked);
+        [](const ros::TimerEvent& event) {
+            controlLoop(event);
         });
 
     ros::spin();

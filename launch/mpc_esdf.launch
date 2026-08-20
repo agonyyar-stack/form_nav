@@ -7,7 +7,6 @@
     <arg name="load_formation_config" default="true" />
     <arg name="neighbor_trajectory_timeout" default="0.3" />
     <arg name="neighbor_future_tolerance" default="0.05" />
-    <arg name="progress_timeout" default="0.3" />
     <!-- A multi-UAV parent launch can load this once and pass load_formation_config=false. -->
     <group if="$(arg load_formation_config)">
         <rosparam command="load" file="$(arg formation_config_file)"
@@ -38,7 +37,7 @@
         <param name="local_frame" value="$(arg uav_id)/map" />
         <param name="formation_config_namespace" value="$(arg formation_config_namespace)" />
         <!-- MPC 可调参数 -->
-        <param name="mpc/N" value="20" />               <!-- 预测步长 -->
+        <param name="mpc/N" value="10" />               <!-- 预测步长 -->
         <param name="mpc/dt" value="0.05" />             <!-- 时间步长 (s) -->
         <param name="mpc/u_max" value="2.0" />           <!-- 线速度/加速度上限 -->
         <param name="mpc/w_max" value="2.0" />           <!-- 角速度/加速度上限 -->
@@ -46,9 +45,11 @@
         <param name="mpc/d_critical_oa" value="0.3" />   <!-- 障碍物临界距离 (m) -->
         <param name="mpc/d_safe_ca" value="0.3" />       <!-- 编队内安全距离 (m) -->
         <param name="mpc/w_ca" value="1000.0" />          <!-- 相互碰撞惩罚权重 -->
+        <param name="mpc/w_form" value="0.0" />        <!-- 编队误差权重（独立于跟踪权重 Q_，默认小一个数量级） -->
+        <param name="mpc/w_track" value="20000.0" />      <!-- 全局轨迹跟踪权重（原 Q_） -->
         <param name="mpc/nearest_obs_num" value="3" />    <!-- 每步查询最近障碍点数量 -->
         <param name="mpc/drone_radius" value="0.3" />     <!-- 无人机半径 (m) -->
-        <param name="mpc/w_oa" value="30000.0" />         <!-- 障碍物避障权重 -->
+        <param name="mpc/w_oa" value="0.0" />         <!-- 障碍物避障权重 -->
         <param name="mpc/obs_floor" value="0.05" />       <!-- 势垒下限：参考点贴障碍时的最小保持距离 -->
         <param name="mpc/obs_beta" value="8.0" />         <!-- softplus 势垒系数（32 过陡易迭代超限） -->
         <param name="mpc/replan_max_iter" value="0" />    <!-- 最近点重查询重规划次数（查询点固定为参考，默认 0） -->
@@ -58,16 +59,18 @@
         <param name="mpc/ipopt_tol" value="1e-6" />       <!-- IPOPT 收敛容差 -->
         <param name="mpc/obs_velocity_term" value="false" /> <!-- 障碍物代价速度方向项（有全局路径引导时可关） -->
         <param name="mpc/hold_dist" value="0.15" />       <!-- 近距紧急悬停阈值 (m) -->
+        <param name="mpc/w_u" value="1.0" />              <!-- 控制输入惩罚 -->
         <param name="mpc/w_du" value="100.0" />             <!-- 控制增量惩罚（抑制指令抖动） -->
-
-        <param name="mpc/w_terminal_vel" value="2000.0" />   <!-- 终端速度惩罚权重（终点刹车） -->
+        <param name="mpc/lookahead_distance" value="1.0" /> <!-- 滚动子目标前瞻距离 (m) -->
+        <param name="mpc/a_brake" value="0.0" />            <!-- 制动加速度 (m/s^2)，0 表示自动取 0.8*u_max -->
 
         <param name="communication/neighbor_trajectory_timeout"
                value="$(arg neighbor_trajectory_timeout)" />
         <param name="communication/neighbor_future_tolerance"
                value="$(arg neighbor_future_tolerance)" />
-        <param name="global_progress/timeout" value="$(arg progress_timeout)" />
         <param name="cloud_topic" value="/map_generator/global_cloud" />
+        <!-- 分布式规划：每机订阅自己的轨迹话题 -->
+        <remap from="/kino_astar/trajectory" to="/$(arg uav_id)/kino_astar/trajectory"/>
         <remap from="/sdf_map/cloud" to="/map_generator/global_cloud"/> 
         <remap from="/sdf_map/occupancy_inflate" to="/$(arg uav_id)/sdf_map/occupancy_inflate"/>
         <remap from="/sdf_map/odom" to="/$(arg uav_id)/mavros/local_position/odom"/>
