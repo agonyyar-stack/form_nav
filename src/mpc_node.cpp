@@ -857,6 +857,7 @@ int main(int argc, char **argv) {
     double neighbor_future_tolerance = nh_private.param<double>("communication/neighbor_future_tolerance", 0.05);
     double lookahead_distance        = nh_private.param<double>("mpc/lookahead_distance", 2.0);
     double brake_accel               = nh_private.param<double>("mpc/a_brake", 0.0);
+    double w_u                       = nh_private.param<double>("mpc/w_u", 100.0);
     double w_du                      = nh_private.param<double>("mpc/w_du", 100.0);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
         throw std::runtime_error(
@@ -869,6 +870,9 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(w_du) || w_du < 0.0) {
         throw std::runtime_error("mpc/w_du must be non-negative");
+    }
+    if (!std::isfinite(w_u) || w_u < 0.0) {
+        throw std::runtime_error("mpc/w_u must be non-negative");
     }
     if (!std::isfinite(w_ca) || w_ca < 0.0) {
         throw std::runtime_error("mpc/w_ca must be non-negative");
@@ -960,6 +964,8 @@ int main(int argc, char **argv) {
     mpc_ptr->setLookaheadDistance(lookahead_distance);
     mpc_ptr->setBrakeAcceleration(brake_accel);
     a_brake_eff = brake_accel > 0.0 ? brake_accel : 0.8 * u_max;
+    mpc_ptr->setControlInputWeight(
+        DM::diag(DM{w_u, w_u, w_u, w_u}));
     mpc_ptr->setControlIncrementWeight(
         DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
     // 编队误差权重：独立于全局轨迹跟踪权重（默认小一个数量级），

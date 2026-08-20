@@ -171,6 +171,8 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
     /// 设置相互碰撞惩罚权重
     void setCollisionWeight(double w) { Wc = w; }
+    /// 设置控制输入惩罚权重 (对角矩阵，原 F_)
+    void setControlInputWeight(const DM& w) { F_ = w; }
     /// 设置控制增量惩罚权重 (对角矩阵)
     void setControlIncrementWeight(const DM& w) { R_d_ = w; }
     /// 设置全局轨迹跟踪权重 (对角矩阵，原 Q_)

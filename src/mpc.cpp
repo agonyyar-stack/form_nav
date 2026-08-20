@@ -549,9 +549,9 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
             // 跟踪项与编队项独立加权，互不耦合
             // cost += MX::mtimes({track_err.T(), Q_, track_err});
             cost += MX::mtimes({S_f.T(), Q_f_, S_f});
-
+            
             MX U_k = U(all, k);
-            cost += MX::mtimes({U_k.T(), F_, U_k});
+            cost += MX::mtimes({U_k.T(), F_, U_k}); // 控制输入惩罚,已停用
         } else {
             cost += MX::mtimes({track_err.T(), Q_, track_err});
             cost += MX::mtimes({S_f.T(), Q_f_, S_f});
