@@ -21,9 +21,7 @@
 #include <stdexcept>
 #include "form_nav/mpc.h"
 #include "form_nav/formation_config.h"
-#include "form_nav/esdf_casadi.h"
 #include "form_nav/kd_tree_map.h"
-#include "form_nav/sdf_map.h"
 #include "form_nav/GlobalTrajectory.h"
 #include "form_nav/PredictedTrajectory.h"
 
@@ -80,10 +78,6 @@ struct NeighborTrajectoryCache {
 };
 
 std::map<int, NeighborTrajectoryCache> neighbor_trajectories;
-
-// --- ESDF 地图 + CasADi 插值器 ---
-std::unique_ptr<SDFMap> sdf_map_ptr;
-EsdfCasadi esdf_casadi;
 
 // --- KD-tree 障碍物地图（第三步：静态避障） ---
 std::unique_ptr<KdTreeMap> kd_tree_ptr;
@@ -623,34 +617,6 @@ void controlLoop(const ros::TimerEvent&) {
         return;
     }
 
-    // 第一阶段只验证全局路径跟踪；暂时停用 ESDF 构建/更新，原代码保留。
-#if 0
-    // ESDF 更新：定期重建 CasADi interpolant（每 1 秒检查一次）
-    static ros::Time last_esdf_update = ros::Time::now();
-    if ((ros::Time::now() - last_esdf_update).toSec() > 1.0) {
-        // 确保 SDFMap 对象存在且 ESDF 数据不为空（首次初始化前 distance_buffer_all_ 为空）
-        if (sdf_map_ptr && !sdf_map_ptr->getDistanceBufferPtr()->empty()) {
-            // bool isInitialized() const { return interp_func_ != nullptr; }
-            if (!esdf_casadi.isInitialized()) {
-                // 首次初始化 — 从 SDFMap 拉取地图元信息 + 数据指针，调用 init() 构建 interpolant
-                double esdf_res = sdf_map_ptr->getResolution();
-                Eigen::Vector3d esdf_origin = sdf_map_ptr->getOrigin();
-                Eigen::Vector3i esdf_voxel = sdf_map_ptr->getVoxelNum3i();
-                esdf_casadi.init(esdf_res, esdf_origin, esdf_voxel,
-                                 sdf_map_ptr->getDistanceBufferPtr());
-                mpc_ptr->setEsdf(&esdf_casadi);
-                ROS_INFO("%s: ESDF CasADi interpolant initialized.", UAV_NAME.c_str());
-            } else {
-                // 已初始化过 → 重新调用 buildInterpolant()，只重新拷贝数据到 interpolant
-                esdf_casadi.updateMap();
-            }
-        } else {
-            ROS_WARN_THROTTLE(5.0, "%s: ESDF not ready yet. Waiting for cloud + odom...", UAV_NAME.c_str());
-        }
-        last_esdf_update = ros::Time::now();
-    }
-#endif
-
     // 求解 MPC (t0 = 最近点时间)
     bool ok = mpc_ptr->solve(t0, neighbors_vec, current_mpc_state);
     // 可视化
@@ -831,12 +797,10 @@ int main(int argc, char **argv) {
     double dt    = nh_private.param<double>("mpc/dt", 0.05);
     double u_max = nh_private.param<double>("mpc/u_max", 6.0);
     double w_max = nh_private.param<double>("mpc/w_max", 2.0);
-    double d_safe_oa = nh_private.param<double>("mpc/d_safe_oa", 0.6);
-    double d_crit_oa = nh_private.param<double>("mpc/d_critical_oa", 0.3);
     double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.3);
     double w_ca      = nh_private.param<double>("mpc/w_ca", 1000.0);
     double w_form    = nh_private.param<double>("mpc/w_form", 2000.0);
-    double w_track   = nh_private.param<double>("mpc/w_track", 20000.0);
+    double w_subgoal = nh_private.param<double>("mpc/w_subgoal", 20000.0);
     int nearest_obs_num = nh_private.param<int>("mpc/nearest_obs_num", 3);
     double drone_radius = nh_private.param<double>("mpc/drone_radius", 0.35);
     double safe_dist    = nh_private.param<double>("mpc/safe_dist", 0.5);
@@ -848,8 +812,6 @@ int main(int argc, char **argv) {
         nh_private.param<double>("mpc/kd_tree_update_interval", 2.0);
     int ipopt_max_iter  = nh_private.param<int>("mpc/ipopt_max_iter", 100);
     double ipopt_tol    = nh_private.param<double>("mpc/ipopt_tol", 1e-6);
-    bool obs_velocity_term =
-        nh_private.param<bool>("mpc/obs_velocity_term", false);
     double hold_dist = nh_private.param<double>("mpc/hold_dist", 0.15);
     const std::string cloud_topic =
         nh_private.param<std::string>("cloud_topic", "/map_generator/global_cloud");
@@ -880,8 +842,8 @@ int main(int argc, char **argv) {
     if (!std::isfinite(w_form) || w_form < 0.0) {
         throw std::runtime_error("mpc/w_form must be non-negative");
     }
-    if (!std::isfinite(w_track) || w_track < 0.0) {
-        throw std::runtime_error("mpc/w_track must be non-negative");
+    if (!std::isfinite(w_subgoal) || w_subgoal < 0.0) {
+        throw std::runtime_error("mpc/w_subgoal must be non-negative");
     }
     if (!std::isfinite(lookahead_distance) || lookahead_distance <= 0.0) {
         throw std::runtime_error("mpc/lookahead_distance must be positive");
@@ -949,15 +911,12 @@ int main(int argc, char **argv) {
     mpc_ptr->setTimeStep(dt);
     mpc_ptr->setMaxVelocity(u_max);
     mpc_ptr->setMaxAngularVelocity(w_max);
-    mpc_ptr->setObstacleSafeDistance(d_safe_oa);
-    mpc_ptr->setObstacleCriticalDistance(d_crit_oa);
     mpc_ptr->setObstacleWeight(w_oa);
     mpc_ptr->setNearestObstacleNum(nearest_obs_num);
     mpc_ptr->setDroneRadius(drone_radius);
     mpc_ptr->setSafeDistance(safe_dist);
     mpc_ptr->setDetectionRange(detect_range);
     mpc_ptr->setReplanMaxIter(replan_max_iter);
-    mpc_ptr->setObstacleVelocityTermEnabled(obs_velocity_term);
     mpc_ptr->setIpoptMaxIter(ipopt_max_iter);
     mpc_ptr->setIpoptTol(ipopt_tol);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
@@ -969,35 +928,28 @@ int main(int argc, char **argv) {
         DM::diag(DM{w_u, w_u, w_u, w_u}));
     mpc_ptr->setControlIncrementWeight(
         DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
-    // 编队误差权重：独立于全局轨迹跟踪权重（默认小一个数量级），
+    // 编队误差权重：独立于子目标惩罚权重（默认小一个数量级），
     // 相对比例与 Q_ 保持一致（x:y:z:yaw = 1:1:0.5:0.005）。
     mpc_ptr->setFormationErrorWeight(
         DM::diag(DM{w_form, w_form, w_form / 2.0, w_form / 200.0}));
-    // 全局轨迹跟踪权重（原 Q_）：相对比例与默认一致（x:y:z:yaw = 1:1:0.5:0.005）
-    mpc_ptr->setTrackingWeight(
-        DM::diag(DM{w_track, w_track, w_track / 2.0, w_track / 200.0}));
+    // 滚动子目标惩罚权重（原 Q_）：相对比例与默认一致（x:y:z:yaw = 1:1:0.5:0.005）
+    mpc_ptr->setSubgoalWeight(
+        DM::diag(DM{w_subgoal, w_subgoal, w_subgoal / 2.0, w_subgoal / 200.0}));
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
-             "d_safe_oa=%.2f, d_critical_oa=%.2f, d_safe_ca=%.2f, w_ca=%.2f, "
-             "w_form=%.2f, w_track=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
+             "d_safe_ca=%.2f, w_ca=%.2f, "
+             "w_form=%.2f, w_subgoal=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
              "safe_dist=%.2f, detect_range=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
              "lookahead=%.2f, a_brake=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_oa, d_crit_oa, d_safe_ca, w_ca, w_form, w_track,
+             d_safe_ca, w_ca, w_form, w_subgoal,
              nearest_obs_num, drone_radius, w_oa,
              safe_dist, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
              lookahead_distance, a_brake_eff);
-
-    // 第一阶段不使用障碍物代价，暂时停用 ESDF 地图初始化；原代码保留。
-#if 0
-    sdf_map_ptr.reset(new SDFMap());
-    sdf_map_ptr->initMap(nh_private); // nh 是公共 NodeHandle，读取 /sdf_map/...
-    mpc_ptr->setEsdf(&esdf_casadi);
-#endif
 
     // 第三步：初始化 KD-tree 障碍物地图（静态避障）
     kd_tree_ptr.reset(new KdTreeMap());

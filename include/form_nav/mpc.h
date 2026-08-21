@@ -7,7 +7,6 @@
 #include <iostream>
 #include <chrono>
 #include <map>
-#include "form_nav/esdf_casadi.h"
 
 using namespace std;
 using namespace casadi;
@@ -47,11 +46,9 @@ private: //存储了 MPC 算法运行时的配置和状态
     double u_max_, u_min_; //线加速度
     double w_max_, w_min_; //角加速度
 
-    int num; //无人机数量
-    
     //权重矩阵
     DM Q_, F_, R_d_;
-    // 编队误差权重（与全局轨迹跟踪权重 Q_ 独立，避免两者耦合打架）
+    // 编队误差权重（与子目标惩罚权重 Q_ 独立，避免两者耦合打架）
     DM Q_f_;
 
     //运动学方程参数
@@ -72,11 +69,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     double T_switch;
     double delta;
 
-    // ESDF 避障参数
-    double d_safe_oa;      // 障碍物安全距离 (m)
-    double d_critical_oa;  // 临界距离，低于此距离惩罚急剧增大
+    // KD-tree 对数势垒避障权重
     double Wo;             // 障碍物避障权重 (标量)
-    EsdfCasadi* esdf_ptr_; // 指向 ESDF CasADi 插值器的指针 (外部管理生命周期)
 
     // KD-tree 静态避障参数（第三步）
     KdTreeMap* kd_tree_ptr_;   // 指向障碍物 KD-tree 的指针 (外部管理生命周期)
@@ -85,7 +79,6 @@ private: //存储了 MPC 算法运行时的配置和状态
     double safe_dist_;         // 对数势垒最小安全距离 L (m)，有效距离口径（扣无人机半径）
     double detect_range_;      // 对数势垒探测范围 D̄ (m)，须大于 safe_dist_
     int replan_max_iter_;      // 最近点重查询重规划的最大迭代次数
-    bool use_obstacle_velocity_term_; // 是否启用速度方向项（论文对比过：关闭后势场径向对称，易局部极小）
 
     //碰撞参数
     double d_safe_ca; // 编队内安全距离 COLLISION AVOIDANCE
@@ -161,11 +154,7 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setLookaheadDistance(double d) { lookahead_distance_ = d; }
     /// 设置制动加速度 (m/s^2)，<=0 时取默认 0.8*u_max
     void setBrakeAcceleration(double a) { a_brake_ = a > 0.0 ? a : 0.8 * u_max_; }
-    /// 设置障碍物安全距离 (m)
-    void setObstacleSafeDistance(double d) { d_safe_oa = d; }
-    /// 设置障碍物临界距离 (m)
-    void setObstacleCriticalDistance(double d) { d_critical_oa = d; }
-    /// 设置障碍物避障权重
+    /// 设置 KD-tree 对数势垒避障权重
     void setObstacleWeight(double w) { Wo = w; }
     /// 设置编队内安全距离 (m)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
@@ -175,13 +164,10 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setControlInputWeight(const DM& w) { F_ = w; }
     /// 设置控制增量惩罚权重 (对角矩阵)
     void setControlIncrementWeight(const DM& w) { R_d_ = w; }
-    /// 设置全局轨迹跟踪权重 (对角矩阵，原 Q_)
-    void setTrackingWeight(const DM& w) { Q_ = w; }
-    /// 设置编队误差权重 (对角矩阵，独立于全局轨迹跟踪权重)
+    /// 设置滚动子目标惩罚权重 (对角矩阵，原 Q_)
+    void setSubgoalWeight(const DM& w) { Q_ = w; }
+    /// 设置编队误差权重 (对角矩阵，独立于子目标惩罚权重)
     void setFormationErrorWeight(const DM& w) { Q_f_ = w; }
-
-    /// 设置 ESDF CasADi 插值器
-    void setEsdf(EsdfCasadi* esdf) { esdf_ptr_ = esdf; }
 
     /// 设置障碍物 KD-tree（第三步：静态避障）
     void setKdTree(KdTreeMap* kd_tree) { kd_tree_ptr_ = kd_tree; }
@@ -195,10 +181,6 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setDetectionRange(double d) { detect_range_ = d; }
     /// 设置最近点重查询重规划的最大迭代次数
     void setReplanMaxIter(int iter) { replan_max_iter_ = iter; }
-    /// 设置是否启用障碍物代价的速度方向项
-    void setObstacleVelocityTermEnabled(bool enabled) {
-        use_obstacle_velocity_term_ = enabled;
-    }
     /// 设置 IPOPT 最大迭代次数
     void setIpoptMaxIter(int iter) { ipopt_max_iter_ = iter; }
     /// 设置 IPOPT 收敛容差
@@ -216,9 +198,6 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     ErrorTerms formationError(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states); //编队误差
 
     MX ViLmpcDot(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states, MX U_k); //李雅普诺夫函数导数
-
-    /// 基于 ESDF 的障碍物避障项 (替代原来的 obstacleAvoidance)
-    MX esdfObstacleAvoidance(MX current_states);
 
     /// 基于 KD-tree 最近障碍点的对数势垒避障项（障碍点作为参数，不在符号图内查询）
     MX kdtreeObstacleAvoidance(MX current_states, MX obstacle_k);

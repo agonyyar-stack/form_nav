@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!-- 固定复杂障碍物（静态）场景，独立运行此节点即可查看场景 -->
-<!-- 完整对比实验请用: roslaunch form_nav formation_planning.launch scene:=fixed -->
+<!-- 完整对比实验请用: roslaunch form_nav formation_test.launch scene:=fixed -->
 <launch>
   <arg name="left_x" default="-20.0" />   <!-- 场景左边缘 x，左边缘中心为 (left_x, center_y) -->
   <arg name="center_y" default="0.0" />   <!-- 场景中心 y -->

@@ -19,8 +19,8 @@ Run these from the catkin workspace root (`~/catkin_ws`):
 
 - `catkin_make` — builds the package; C++17 is set in `CMakeLists.txt`
 - `source devel/setup.bash` — load the built workspace into the shell
-- `roslaunch form_nav formation_planning.launch` — start the formation planning stack
-- `roslaunch form_nav mpc_esdf.launch` — start MPC + ESDF obstacle avoidance
+- `roslaunch form_nav formation_test.launch` — start the formation planning stack
+- `roslaunch form_nav mpc.launch` — start MPC + KD-tree obstacle avoidance
 - `roslaunch form_nav multi_uav_gazebo.launch` — start the multi-UAV Gazebo simulation
 
 ## Coding Style & Naming Conventions

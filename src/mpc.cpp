@@ -10,14 +10,14 @@ Mpc::Mpc() {
     u_min_ = - u_max_;
     w_min_ = - w_max_;
     //权重矩阵Q,F
-    Q_ = DM::diag(DM{20000, 20000, 10000, 100}); // 全局轨迹跟踪权重（可由 mpc/w_track 覆盖）
+    Q_ = DM::diag(DM{20000, 20000, 10000, 100}); // 滚动子目标惩罚权重（可由 mpc/w_subgoal 覆盖）
     F_ = DM::diag(DM{100, 100, 100, 100});       // 控制输入惩罚
     R_d_ = DM::diag(DM{100, 100, 100, 25});      // 控制增量惩罚（抑制重规划导致的指令抖动）
     // 滚动子目标参数
     lookahead_distance_ = 2.0;                   // 子目标沿弧长前瞻距离 (m)
     a_brake_ = 0.8 * u_max_;                     // 制动加速度（保守最大减速度）
     has_rolling_goal_ = false;
-    // 编队误差权重：与跟踪权重 Q_ 拆分为独立项，默认比 Q_ 小一个数量级
+    // 编队误差权重：与子目标惩罚权重 Q_ 拆分为独立项，默认比 Q_ 小一个数量级
     Q_f_ = DM::diag(DM{2000, 2000, 1000, 10});
     //运动学参数
     Lx = 0.83; Kx = 1;
@@ -28,11 +28,8 @@ Mpc::Mpc() {
     gama = DM::diag(DM{Kx/Lx, Ky/Ly, Kz/Lz, Kw/Lw});
     kinematic_equation_ = setKinematicEquation(); 
     // 编队偏移量由外部 setFormationOffsets() 注入，默认自身偏移为 [0,0,0,0]
-    // ESDF 障碍物避障参数
-    d_safe_oa = 0.6;       // 障碍物安全距离 (m)
-    d_critical_oa = 0.3;   // 临界距离 (m), 低于此距离急剧惩罚
+    // KD-tree 对数势垒避障权重
     Wo = 50000;            // 障碍物避障权重 (标量)
-    esdf_ptr_ = nullptr;   // ESDF 插值器指针，由外部设置
     // KD-tree 静态避障参数（第三步）
     kd_tree_ptr_ = nullptr;   // 障碍物 KD-tree 指针，由外部设置
     nearest_obs_num_ = 3;     // 每个预测步查询的最近障碍点数量
@@ -40,7 +37,6 @@ Mpc::Mpc() {
     safe_dist_ = 0.5;         // 对数势垒最小安全距离 L (m，有效距离口径)
     detect_range_ = 2.5;      // 对数势垒探测范围 D̄ (m)
     replan_max_iter_ = 2;     // 最近点重查询重规划最大迭代次数
-    use_obstacle_velocity_term_ = true; // 速度方向项默认开启
     ipopt_max_iter_ = 100;    // IPOPT 最大迭代次数
     ipopt_tol_ = 1e-6;        // IPOPT 收敛容差
     // Opti 复用相关
@@ -351,39 +347,6 @@ MX Mpc::ViLmpcDot(int k_step, MX reference_state, std::map<int, MX>& neighbor_pa
 #endif
 }
 
-MX Mpc::esdfObstacleAvoidance(MX current_states) {
-    MX pos_i = current_states(Slice(0, 3));  // [x, y, z] 世界坐标系
-    MX H_oa = MX(0.0);
-
-    if (esdf_ptr_ == nullptr || !esdf_ptr_->isInitialized()) {
-        // 无 ESDF 数据时返回零惩罚
-        return H_oa;
-    }
-
-    MX dist = esdf_ptr_->getDistMX(pos_i);
-
-    // 避障惩罚函数:
-    // 当 dist > d_safe_oa: 安全，惩罚 ≈ 0
-    // 当 d_critical_oa < dist <= d_safe_oa: 平滑过渡区，log 型惩罚
-    // 当 dist <= d_critical_oa: 临界区，指数型惩罚（更强的排斥力）
-    //
-    // 使用平滑近似避免 log 和 max 的不可导区域:
-    //   h_oa = Wo * softplus(d_safe_oa - dist) / d_safe_oa
-    // 其中 softplus(x) = log(1 + exp(k*x)) / k 是 ReLU 的平滑近似
-
-    double k_smooth = 10.0;  // softplus 平滑系数
-    MX margin = d_safe_oa - dist; 
-    MX softplus_val = log(1.0 + exp(k_smooth * margin)) / k_smooth;
-
-    // 对临界区域添加额外惩罚
-    MX critical_margin = d_critical_oa - dist;
-    MX critical_penalty = log(1.0 + exp(k_smooth * critical_margin)) / k_smooth;
-
-    H_oa = Wo * (softplus_val + 5.0 * critical_penalty);
-
-    return H_oa;
-}
-
 MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
     MX H_oa = MX(0.0);
     if (kd_tree_ptr_ == nullptr || kd_tree_ptr_->empty() ||
@@ -516,12 +479,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
 
         ErrorTerms errors1 = formationError(k, reference_k, neighbor_params_, X_k);
         MX S_f = errors1.S1;  // 编队 containment 误差（仅邻居项）
-        // 全局轨迹跟踪误差：本机物理参考 vs 预测状态（位置 + 偏航）
-        MX track_err = X_k(Slice(0, 4)) - reference_k(Slice(0, 4));
-#if 0
-        MX H_oa = esdfObstacleAvoidance(X_k); // 基于ESDF的障碍物避障（旧方案，已停用）
-        cost += H_oa;
-#endif
+        // 滚动子目标误差：预测状态（位置 + 偏航）vs 子目标参考
+        MX subgoal_err = X_k(Slice(0, 4)) - reference_k(Slice(0, 4));
         MX H_ca = collisionAvoidance(reference_k, k, neighbor_params_, X_k);
         cost += H_ca;
 
@@ -530,14 +489,13 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         cost += H_oa_kd;
 
         if (k < N_) {
-            // 跟踪项与编队项独立加权，互不耦合
-            // cost += MX::mtimes({track_err.T(), Q_, track_err});
+            // 子目标惩罚只加在终端步，中间步仅编队项独立加权，互不耦合
             cost += MX::mtimes({S_f.T(), Q_f_, S_f});
             
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k}); // 控制输入惩罚,已停用
         } else {
-            cost += MX::mtimes({track_err.T(), Q_, track_err});
+            cost += MX::mtimes({subgoal_err.T(), Q_, subgoal_err});
             cost += MX::mtimes({S_f.T(), Q_f_, S_f});
         }
     }

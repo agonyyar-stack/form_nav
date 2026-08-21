@@ -59,7 +59,7 @@
 
   <group if="$(arg rviz)">
     <node pkg="rviz" type="rviz" name="rviz"
-          args="-d $(find form_nav)/rviz/formation_planning.rviz" />
+          args="-d $(find form_nav)/rviz/formation_test.rviz" />
   </group>
 
   <include file="$(find form_nav)/launch/uav_base.launch">
@@ -130,7 +130,7 @@
     <arg name="load_formation_config" value="false" />
   </include>
 
-  <include file="$(find form_nav)/launch/mpc_esdf.launch">
+  <include file="$(find form_nav)/launch/mpc.launch">
     <arg name="uav_id" value="uav0" />
     <arg name="my_id" value="0" />
     <arg name="world_frame" value="$(arg world_frame)" />
@@ -140,7 +140,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
   </include>
-  <include file="$(find form_nav)/launch/mpc_esdf.launch">
+  <include file="$(find form_nav)/launch/mpc.launch">
     <arg name="uav_id" value="uav1" />
     <arg name="my_id" value="1" />
     <arg name="world_frame" value="$(arg world_frame)" />
@@ -150,7 +150,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
   </include>
-  <include file="$(find form_nav)/launch/mpc_esdf.launch">
+  <include file="$(find form_nav)/launch/mpc.launch">
     <arg name="uav_id" value="uav2" />
     <arg name="my_id" value="2" />
     <arg name="world_frame" value="$(arg world_frame)" />
@@ -160,7 +160,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
   </include>
-  <include file="$(find form_nav)/launch/mpc_esdf.launch">
+  <include file="$(find form_nav)/launch/mpc.launch">
     <arg name="uav_id" value="uav3" />
     <arg name="my_id" value="3" />
     <arg name="world_frame" value="$(arg world_frame)" />
@@ -170,7 +170,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
   </include>
-  <include file="$(find form_nav)/launch/mpc_esdf.launch">
+  <include file="$(find form_nav)/launch/mpc.launch">
     <arg name="uav_id" value="uav4" />
     <arg name="my_id" value="4" />
     <arg name="world_frame" value="$(arg world_frame)" />
@@ -180,7 +180,7 @@
     <arg name="neighbor_trajectory_timeout" value="$(arg neighbor_trajectory_timeout)" />
     <arg name="neighbor_future_tolerance" value="$(arg neighbor_future_tolerance)" />
   </include>
-  <include file="$(find form_nav)/launch/mpc_esdf.launch">
+  <include file="$(find form_nav)/launch/mpc.launch">
     <arg name="uav_id" value="uav5" />
     <arg name="my_id" value="5" />
     <arg name="world_frame" value="$(arg world_frame)" />
