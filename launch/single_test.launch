@@ -3,7 +3,7 @@
     <arg name="scene" default="random" />
 
     <!-- gazebo -->
-    <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">
+    <include file="$(find form_nav)/launch/single_uav_gazebo.launch">
     </include>
 
     <group unless="$(eval arg('scene') == 'fixed')">

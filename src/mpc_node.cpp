@@ -36,6 +36,8 @@ double NEIGHBOR_TRAJECTORY_TIMEOUT = 0.3;
 double NEIGHBOR_FUTURE_TOLERANCE = 0.05;
 const double LOOP_RATE = 20.0;
 double a_brake_eff = 0.0;  // 制动加速度（与 MPC 内部一致，用于当前状态可行性预检）
+double ARRIVAL_DISTANCE = 0.1;   // 到达锁定：到终点直线距离阈值 (m)
+double ARRIVAL_VELOCITY = 0.1;   // 到达锁定：3D 速度阈值 (m/s)
 
 std::unique_ptr<tf2_ros::Buffer> tf_buffer_ptr;
 std::unique_ptr<tf2_ros::TransformListener> tf_listener_ptr;
@@ -59,7 +61,6 @@ Eigen::VectorXd current_mpc_state = Eigen::VectorXd::Zero(8);
 bool has_pose = false;
 bool has_velocity = false;
 bool has_yaw = false;
-int last_global_idx = 0;
 
 double vel_world_x = 0, vel_world_y = 0, vel_world_z = 0;
 double vel_body_w = 0;
@@ -154,9 +155,9 @@ void fcStateCallback(const mavros_msgs::State::ConstPtr& msg) {
 }
 
 // ========== 全局轨迹回调 ==========
-// 数据格式: 每点 7 个 double [t, x, y, z, vx, vy, vz]
+// 数据格式: 每点 6 个 double [x, y, z, vx, vy, vz]
 void globalTrajCallback(const form_nav::GlobalTrajectory::ConstPtr& msg) {
-    constexpr size_t stride = 7;
+    constexpr size_t stride = 6;
     if (msg->header.stamp.isZero() || msg->header.frame_id != WORLD_FRAME ||
         msg->trajectory_id == 0 || msg->steps == 0 ||
         msg->waypoints.size() != static_cast<size_t>(msg->steps) * stride ||
@@ -169,82 +170,29 @@ void globalTrajCallback(const form_nav::GlobalTrajectory::ConstPtr& msg) {
 
     std::vector<GlobalWaypoint> received_trajectory;
     received_trajectory.reserve(msg->steps);
-    double previous_time = -std::numeric_limits<double>::infinity();
     for (uint32_t i = 0; i < msg->steps; ++i) {
         GlobalWaypoint wp;
         const size_t off = static_cast<size_t>(i) * stride;
-        wp.t   = msg->waypoints[off + 0];
-        wp.x   = msg->waypoints[off + 1];
-        wp.y   = msg->waypoints[off + 2];
-        wp.z   = msg->waypoints[off + 3];
-        wp.vx  = msg->waypoints[off + 4];
-        wp.vy  = msg->waypoints[off + 5];
-        wp.vz  = msg->waypoints[off + 6];
+        wp.x   = msg->waypoints[off + 0];
+        wp.y   = msg->waypoints[off + 1];
+        wp.z   = msg->waypoints[off + 2];
+        wp.vx  = msg->waypoints[off + 3];
+        wp.vy  = msg->waypoints[off + 4];
+        wp.vz  = msg->waypoints[off + 5];
         wp.yaw = 0;
         wp.vyaw = 0;
-        if (wp.t < 0.0 || wp.t <= previous_time) {
-            ROS_WARN_THROTTLE(2.0,
-                              "%s: global trajectory %u has non-increasing time.",
-                              UAV_NAME.c_str(), msg->trajectory_id);
-            return;
-        }
-        previous_time = wp.t;
         received_trajectory.push_back(wp);
     }
 
     global_traj = std::move(received_trajectory);
     global_traj_received = true;
     current_trajectory_id = msg->trajectory_id;
-    last_global_idx = 0;
     neighbor_trajectories.clear();
     // 新轨迹意味着新的任务：解除到达悬停锁定，允许再次起飞。
     arrived_hold_ = false;
     mpc_ptr->setGlobalTrajectory(global_traj);
     ROS_INFO("%s: received global trajectory %u with %zu waypoints",
              UAV_NAME.c_str(), current_trajectory_id, global_traj.size());
-}
-
-// ========== 在最近点附近窗口内搜索，返回时间 ==========
-// 分布式规划：query_pos 是本机物理位置，投影到本机物理轨迹上取路径时间。
-double findClosestWaypointTime(const Eigen::Vector3d& query_pos) {
-    if (global_traj.empty()) return 0.0;
-
-    const int win_back = 3, win_forward = 30;    // 搜索窗口: [last-3, last+30]
-
-    int lo = std::max(0, last_global_idx - win_back);
-    int hi = std::min((int)global_traj.size() - 1, last_global_idx + win_forward);
-
-    double min_dist = 1e9;
-    int closest = lo;
-    for (int i = lo; i <= hi; ++i) {
-        double dx = query_pos.x() - global_traj[i].x;
-        double dy = query_pos.y() - global_traj[i].y;
-        double dz = query_pos.z() - global_traj[i].z;
-        double d2 = dx*dx + dy*dy + dz*dz;
-        if (d2 < min_dist) {
-            min_dist = d2;
-            closest = i;
-        }
-    }
-
-    // 如果最近点落在窗口边界附近, 扩展一次全量搜索做安全重置
-    if (closest == hi || closest == lo) {
-        for (size_t i = 0; i < global_traj.size(); ++i) {
-            double dx = query_pos.x() - global_traj[i].x;
-            double dy = query_pos.y() - global_traj[i].y;
-            double dz = query_pos.z() - global_traj[i].z;
-            double d2 = dx*dx + dy*dy + dz*dz;
-            if (d2 < min_dist) {
-                min_dist = d2;
-                closest = i;
-            }
-        }
-    }
-
-    // 路径进度保持单调，避免无人机在弯道或局部回头时跳回旧路径段。
-    closest = std::max(closest, last_global_idx);
-    last_global_idx = closest;
-    return global_traj[closest].t;
 }
 
 // ========== MAVROS 回调 ==========
@@ -533,30 +481,29 @@ void controlLoop(const ros::TimerEvent&) {
     }
 
     const ros::Time solve_stamp = ros::Time::now();
-    // 分布式规划：每机在自身的物理轨迹上投影当前物理位置得到路径时间，
-    // 不再依赖 leader 发布的全局进度。
+    // 分布式规划：每机在自身的物理轨迹上投影当前物理位置得到路径进度
+    // （累积弧长 s0），供滚动子目标前瞻使用。
     const Eigen::Vector3d current_pos(
         current_mpc_state(0), current_mpc_state(1), current_mpc_state(2));
-    const double t0 = findClosestWaypointTime(current_pos);
+    const double s0 = mpc_ptr->projectToPath(current_pos);
 
     // ========== 到达终点检测：锁定悬停，避免原地振荡 ==========
     // 每架无人机的停靠目标就是自己轨迹的末端（物理坐标）。
     // 一旦满足条件即锁定（arrived_hold_），之后持续悬停不再回 MPC 求解，
     // 避免在阈值附近悬停/振荡反复切换；收到新轨迹时由 globalTrajCallback 解锁。
-    // 终点距离/速度在这里提前计算，用于锁定判定。
+    // 到达判定 = 到终点直线距离 < arrival_distance 且 3D 速度 < arrival_velocity。
     const Eigen::Vector3d traj_end(global_traj.back().x,
                                    global_traj.back().y,
                                    global_traj.back().z);
     const double end_dist = (current_pos - traj_end).norm();
-    const double speed = std::hypot(vel_world_x, vel_world_y);
+    const double speed = std::hypot(vel_world_x, vel_world_y, vel_world_z);
 
     if (arrived_hold_) {
         publishHoldPositionSetpoint(solve_stamp);
         publishStationaryPrediction(solve_stamp);
         return;
     }
-    if (t0 >= global_traj.back().t - 0.5 &&
-        end_dist < 0.5 && speed < 0.3) {
+    if (end_dist < ARRIVAL_DISTANCE && speed < ARRIVAL_VELOCITY) {
         arrived_hold_ = true;
         ROS_INFO("%s: reached trajectory end (dist=%.2f m, speed=%.2f m/s), "
                  "locking hold.",
@@ -618,7 +565,7 @@ void controlLoop(const ros::TimerEvent&) {
     }
 
     // 求解 MPC (t0 = 最近点时间)
-    bool ok = mpc_ptr->solve(t0, neighbors_vec, current_mpc_state);
+    bool ok = mpc_ptr->solve(s0, neighbors_vec, current_mpc_state);
     // 可视化
     if (ok) {
         auto u = mpc_ptr->getFirstU(); // body
@@ -819,6 +766,8 @@ int main(int argc, char **argv) {
     double neighbor_future_tolerance = nh_private.param<double>("communication/neighbor_future_tolerance", 0.05);
     double lookahead_distance        = nh_private.param<double>("mpc/lookahead_distance", 2.0);
     double brake_accel               = nh_private.param<double>("mpc/a_brake", 0.0);
+    double arrival_distance          = nh_private.param<double>("mpc/arrival_distance", 0.1);
+    double arrival_velocity          = nh_private.param<double>("mpc/arrival_velocity", 0.1);
     double w_u                       = nh_private.param<double>("mpc/w_u", 100.0);
     double w_du                      = nh_private.param<double>("mpc/w_du", 100.0);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
@@ -847,6 +796,12 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(lookahead_distance) || lookahead_distance <= 0.0) {
         throw std::runtime_error("mpc/lookahead_distance must be positive");
+    }
+    if (!std::isfinite(arrival_distance) || arrival_distance <= 0.0) {
+        throw std::runtime_error("mpc/arrival_distance must be positive");
+    }
+    if (!std::isfinite(arrival_velocity) || arrival_velocity <= 0.0) {
+        throw std::runtime_error("mpc/arrival_velocity must be positive");
     }
     if (!std::isfinite(brake_accel) || brake_accel < 0.0) {
         throw std::runtime_error("mpc/a_brake must be non-negative");
@@ -886,6 +841,8 @@ int main(int argc, char **argv) {
     MPC_HORIZON = N;
     MPC_DT = dt;
     obstacle_hold_dist = hold_dist;
+    ARRIVAL_DISTANCE = arrival_distance;
+    ARRIVAL_VELOCITY = arrival_velocity;
     NEIGHBOR_TRAJECTORY_TIMEOUT = neighbor_timeout;
     NEIGHBOR_FUTURE_TOLERANCE = neighbor_future_tolerance;
     UAV_NAME = "uav" + std::to_string(my_id);
@@ -942,14 +899,16 @@ int main(int argc, char **argv) {
              "safe_dist=%.2f, detect_range=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
-             "lookahead=%.2f, a_brake=%.2f",
+             "lookahead=%.2f, a_brake=%.2f, "
+             "arrival_dist=%.2f, arrival_vel=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
              d_safe_ca, w_ca, w_form, w_subgoal,
              nearest_obs_num, drone_radius, w_oa,
              safe_dist, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
-             lookahead_distance, a_brake_eff);
+             lookahead_distance, a_brake_eff,
+             ARRIVAL_DISTANCE, ARRIVAL_VELOCITY);
 
     // 第三步：初始化 KD-tree 障碍物地图（静态避障）
     kd_tree_ptr.reset(new KdTreeMap());

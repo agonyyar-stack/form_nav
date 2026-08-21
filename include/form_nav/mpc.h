@@ -26,9 +26,8 @@ struct UavState {
     int id;
 };
 
-// 全局轨迹路径点 (kinodynamic A* 输出, 含时间+空间+速度)
+// 全局轨迹路径点 (全局规划器输出, 含空间+速度)
 struct GlobalWaypoint {
-    double t;            // 累计时间 (s)
     double x, y, z;     // 位置 (m)
     double yaw;         // 偏航角 (rad)
     double vx, vy, vz;  // 速度 (m/s, 世界坐标系)
@@ -124,6 +123,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     // 全局轨迹
     std::vector<GlobalWaypoint> global_traj_;
     bool has_global_traj_;
+    // 最近一次投影的路径点索引（用于窗口搜索与进度单调保护）
+    size_t last_progress_idx_ = 0;
     // 滚动子目标：沿弧长前瞻选取，全局轨迹仅提供方向引导
     std::vector<double> path_arclength_;  // 与 global_traj_ 同步的累积弧长 (m)
     double lookahead_distance_;           // 子目标前瞻距离 (m)
@@ -186,14 +187,14 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 设置 IPOPT 收敛容差
     void setIpoptTol(double tol) { ipopt_tol_ = tol; }
 
-    /// 设置 kinodynamic A* 输出的全局轨迹
+    /// 设置全局规划器输出的全局轨迹
     void setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj);
 
-    /// 对全局参考轨迹进行数值线性插值，超出时间范围时保持首/末点
-    GlobalWaypoint interpolateGlobalTrajectory(double t) const;
+    /// 将物理位置投影到全局轨迹，返回最近路径点的累积弧长 s0 (m)
+    double projectToPath(const Eigen::Vector3d& query_pos);
 
-    /// 沿轨迹弧长从 t0 前推 lookahead_distance_ 选取滚动子目标
-    GlobalWaypoint selectRollingGoal(double t0);
+    /// 沿轨迹弧长从 s0 前推 lookahead_distance_ 选取滚动子目标
+    GlobalWaypoint selectRollingGoal(double s0);
 
     ErrorTerms formationError(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states); //编队误差
 
@@ -212,7 +213,7 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
         const std::vector<Eigen::Vector3d>& query_pts,
         std::vector<int>& out_indices);
 
-    bool solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states); //求解优化问题
+    bool solve(double s0, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states); //求解优化问题
 
     vector<double> getFirstU(); //最优控制序列中的第一个控制量
     vector<double> getPredictX(); //最优状态序列
