@@ -31,7 +31,7 @@ double scene_center_y_ = 0.0;  // 场景中心 y
 double scene_size_x_ = 20.0;
 double scene_size_y_ = 20.0;
 double scene_size_z_ = 3.0;
-double resolution_ = 0.1;
+double resolution_ = 0.2;
 double pub_rate_ = 10.0;
 std::string frame_id_ = "world";
 
@@ -144,7 +144,7 @@ int main(int argc, char** argv)
   n.param("scene/size_x", scene_size_x_, 20.0);
   n.param("scene/size_y", scene_size_y_, 20.0);
   n.param("scene/size_z", scene_size_z_, 3.0);
-  n.param("scene/resolution", resolution_, 0.1);
+  n.param("scene/resolution", resolution_, 0.2);
   n.param("pub_rate", pub_rate_, 10.0);
   n.param("frame_id", frame_id_, std::string("world"));
 

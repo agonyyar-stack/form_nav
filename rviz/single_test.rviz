@@ -5,9 +5,9 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
+        - /globalcloud1
         - /kinoA*1/kinoA*_path_marker1
         - /kinoA*1/kinoA*_path_nodes1
-        - /Astar_path1
         - /UAV01/Recorded_Path1
         - /UAV01/MPC1
         - /UAV01/MPC1/mpc_trajectory1
@@ -82,7 +82,7 @@ Visualization Manager:
       Marker Topic: /uav0/mpc_sub_goal_marker
       Name: subgoal
       Namespaces:
-        mpc_sub_goal: true
+        {}
       Queue Size: 100
       Value: true
     - Alpha: 1
@@ -262,8 +262,7 @@ Visualization Manager:
               Marker Topic: /uav0/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                mpc_predict_points: true
-                mpc_predicted_path: true
+                {}
               Queue Size: 100
               Value: true
           Enabled: true
@@ -726,17 +725,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 5.386720180511475
-        Y: -5.830586910247803
-        Z: -8.885090827941895
+        X: -12.194246292114258
+        Y: 0.45092231035232544
+        Z: -8.562883377075195
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.524796485900879
+      Pitch: 1.3197965621948242
       Target Frame: <Fixed Frame>
-      Yaw: 4.753561019897461
+      Yaw: 4.688556671142578
     Saved: ~
 Window Geometry:
   Displays:
