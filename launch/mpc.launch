@@ -57,8 +57,6 @@
         <param name="communication/neighbor_future_tolerance"
                value="$(arg neighbor_future_tolerance)" />
         <param name="cloud_topic" value="/map_generator/global_cloud" />
-        <!-- 分布式规划：每机订阅自己的轨迹话题 -->
-        <remap from="/kino_astar/trajectory" to="/$(arg uav_id)/kino_astar/trajectory"/>
     </node>
 
 </launch>

@@ -11,10 +11,10 @@
 namespace path_searching
 {
 
-#define inf (1 << 30);
-#define IN_OPEN_LIST_ 'a';
-#define IN_CLOSE_LIST_ 'b';
-#define NOT_EXPANDED_ 'c';
+#define inf (1 << 30)
+#define IN_OPEN_LIST_ 'a'
+#define IN_CLOSE_LIST_ 'b'
+#define NOT_EXPANDED_ 'c'
 
 class PathNode
 {
@@ -113,6 +113,7 @@ private:
   int use_node_num_;        // number of the nodes expanded
   double lambda_;           // weight for the heuristic term
   double tie_breaker_;      // enhance the search velocity
+  double goal_tolerance_;   // 终点容差 (m)，与 kinoA* 的 goal_tolerance 语义对齐
 
   enum
   {
@@ -132,6 +133,8 @@ private:
   double getEuclHeu(Eigen::Vector3d x1, Eigen::Vector3d x2);
   double getDiagonalHeu(Eigen::Vector3d x1, Eigen::Vector3d x2);
   void retrievePath(PathNodePtr end_node, std::vector<Eigen::Vector3d>& path);
+  // 检查直线段是否无碰撞（从 from 到 to 按约半个分辨率采样）
+  bool isSegmentCollisionFree(const Eigen::Vector3d& from, const Eigen::Vector3d& to);
 
 public:
   void setParam(ros::NodeHandle& nh); //设置A*算法的参数，包括启发式函数权重、节点预分配数量等

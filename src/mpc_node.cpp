@@ -922,7 +922,7 @@ int main(int argc, char **argv) {
 
     // 全局轨迹订阅
     ros::Subscriber global_traj_sub = nh.subscribe<form_nav::GlobalTrajectory>(
-        "/kino_astar/trajectory", 1, globalTrajCallback);
+        "/" + UAV_NAME + "/global_trajectory", 1, globalTrajCallback);
 
     // 第三步：障碍物点云（仿真阶段为全局真值点云，后续可换感知 local cloud）
     ros::Subscriber obstacle_cloud_sub = nh.subscribe<sensor_msgs::PointCloud2>(

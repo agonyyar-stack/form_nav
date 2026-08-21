@@ -8,6 +8,8 @@
   <arg name="formation_config_namespace" default="/formation_config" />
   <arg name="neighbor_trajectory_timeout" default="0.3" />
   <arg name="neighbor_future_tolerance" default="0.05" />
+  <!-- 全局层算法选择: kino_astar=kinodynamic A*, astar=纯 A* -->
+  <arg name="global_planner" default="kino_astar" />
 
   <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">
   </include>
@@ -81,6 +83,8 @@
     <arg name="uav_id" value="uav5" />
   </include>
 
+  <!-- ========== 全局规划器（kinoA*） ========== -->
+  <group if="$(eval arg('global_planner') == 'kino_astar')">
   <include file="$(find form_nav)/launch/kino_astar_grid.launch">
     <arg name="uav_id" value="uav0" />
     <arg name="my_id" value="0" />
@@ -129,6 +133,59 @@
     <arg name="formation_config_namespace" value="$(arg formation_config_namespace)" />
     <arg name="load_formation_config" value="false" />
   </include>
+  </group>
+
+  <!-- ========== 全局规划器（纯 A*） ========== -->
+  <group if="$(eval arg('global_planner') == 'astar')">
+  <include file="$(find form_nav)/launch/astar_grid.launch">
+    <arg name="uav_id" value="uav0" />
+    <arg name="my_id" value="0" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="formation_config_file" value="$(arg formation_config_file)" />
+    <arg name="formation_config_namespace" value="$(arg formation_config_namespace)" />
+    <arg name="load_formation_config" value="false" />
+  </include>
+  <include file="$(find form_nav)/launch/astar_grid.launch">
+    <arg name="uav_id" value="uav1" />
+    <arg name="my_id" value="1" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="formation_config_file" value="$(arg formation_config_file)" />
+    <arg name="formation_config_namespace" value="$(arg formation_config_namespace)" />
+    <arg name="load_formation_config" value="false" />
+  </include>
+  <include file="$(find form_nav)/launch/astar_grid.launch">
+    <arg name="uav_id" value="uav2" />
+    <arg name="my_id" value="2" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="formation_config_file" value="$(arg formation_config_file)" />
+    <arg name="formation_config_namespace" value="$(arg formation_config_namespace)" />
+    <arg name="load_formation_config" value="false" />
+  </include>
+  <include file="$(find form_nav)/launch/astar_grid.launch">
+    <arg name="uav_id" value="uav3" />
+    <arg name="my_id" value="3" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="formation_config_file" value="$(arg formation_config_file)" />
+    <arg name="formation_config_namespace" value="$(arg formation_config_namespace)" />
+    <arg name="load_formation_config" value="false" />
+  </include>
+  <include file="$(find form_nav)/launch/astar_grid.launch">
+    <arg name="uav_id" value="uav4" />
+    <arg name="my_id" value="4" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="formation_config_file" value="$(arg formation_config_file)" />
+    <arg name="formation_config_namespace" value="$(arg formation_config_namespace)" />
+    <arg name="load_formation_config" value="false" />
+  </include>
+  <include file="$(find form_nav)/launch/astar_grid.launch">
+    <arg name="uav_id" value="uav5" />
+    <arg name="my_id" value="5" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="formation_config_file" value="$(arg formation_config_file)" />
+    <arg name="formation_config_namespace" value="$(arg formation_config_namespace)" />
+    <arg name="load_formation_config" value="false" />
+  </include>
+  </group>
 
   <include file="$(find form_nav)/launch/mpc.launch">
     <arg name="uav_id" value="uav0" />

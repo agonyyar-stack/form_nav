@@ -1,39 +1,70 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="uav_id" default="uav0" />
-  <node pkg="form_nav" name="astar_node" type="astar_node" output="screen">
-    <param name="grid_map/resolution" value="0.1" />
-    <param name="grid_map/map_size_x" value="55.0" />
-    <param name="grid_map/map_size_y" value="55.0" />
-    <param name="grid_map/map_size_z" value="3.0" />
-    <param name="grid_map/local_update_range_x" value="40.0" />
-    <param name="grid_map/local_update_range_y" value="20.0" />
-    <param name="grid_map/local_update_range_z" value="3.0" />
-    <param name="grid_map/obstacles_inflation" value="0.099" />
-    <param name="grid_map/local_map_margin" value="30" />
-    <param name="grid_map/ground_height" value="-0.01" />
-    <!-- local fusion -->
-    <param name="grid_map/p_hit" value="0.65" />
-    <param name="grid_map/p_miss" value="0.35" />
-    <param name="grid_map/p_min" value="0.12" />
-    <param name="grid_map/p_max" value="0.90" />
-    <param name="grid_map/p_occ" value="0.80" />
-    <param name="grid_map/min_ray_length" value="0.1" />
-    <param name="grid_map/max_ray_length" value="4.5" />
-    <param name="grid_map/virtual_ceil_height" value="2.5" />
-    <param name="grid_map/visualization_truncate_height" value="2.4" />
-    <param name="grid_map/show_occ_time" value="false" />
-    <param name="grid_map/pose_type" value="2" />
-    <param name="grid_map/frame_id" value="world" />
-    <!-- astar parameters -->
-    <param name="astar/resolution" value="0.1" />
+  <arg name="my_id" default="0" />
+  <arg name="world_frame" default="world" />
+  <arg name="formation_config_file"
+       default="$(find form_nav)/config/formations.yaml" />
+  <arg name="formation_config_namespace" default="/formation_config" />
+  <arg name="load_formation_config" default="true" />
+
+  <!-- 从 yaml 加载编队配置（父 launch 已加载时可传 false） -->
+  <group if="$(arg load_formation_config)">
+    <rosparam command="load" file="$(arg formation_config_file)"
+              ns="$(arg formation_config_namespace)" />
+  </group>
+
+  <node name="$(arg uav_id)_odom_to_world" pkg="form_nav" type="odom_to_world" output="screen">
+    <param name="world_frame" value="$(arg world_frame)" />
+    <param name="default_local_frame" value="$(arg uav_id)/map" />
+    <param name="input_topic" value="/$(arg uav_id)/mavros/local_position/odom" />
+    <param name="output_topic" value="/$(arg uav_id)/mavros/local_position/odom_world" />
+  </node>
+
+  <node name="$(arg uav_id)_astar_node" pkg="form_nav" type="astar_node" output="screen">
+    <param name="world_frame" value="$(arg world_frame)" />
+    <param name="my_id" value="$(arg my_id)" />
+    <param name="formation_config_namespace" value="$(arg formation_config_namespace)" />
+    <param name="grid_map/resolution" value="0.1" /> <!-- 栅格地图分辨率，单位 m/格 -->
+    <param name="grid_map/map_size_x" value="50.0" /> <!-- 地图 X 方向尺寸，单位 m -->
+    <param name="grid_map/map_size_y" value="50.0" /> <!-- 地图 Y 方向尺寸，单位 m -->
+    <param name="grid_map/map_size_z" value="3.0" /> <!-- 地图 Z 方向尺寸，单位 m -->
+    <param name="grid_map/local_update_range_x" value="40.0" /> <!-- X 方向局部地图更新范围 -->
+    <param name="grid_map/local_update_range_y" value="20.0" /> <!-- Y 方向局部地图更新范围 -->
+    <param name="grid_map/local_update_range_z" value="3.0" /> <!-- Z 方向局部地图更新范围 -->
+    <param name="grid_map/obstacles_inflation" value="0.3" /> <!-- 障碍物膨胀半径，单位 m -->
+    <param name="grid_map/local_map_margin" value="30" /> <!-- 局部地图边距，单位格数 -->
+    <param name="grid_map/ground_height" value="-0.01" /> <!-- 地面高度，低于此值视为地面 -->
+    <!-- local fusion: 基于深度图的占用概率融合参数 -->
+    <param name="grid_map/p_hit" value="0.65" /> <!-- 命中概率，射线终点处的占用概率 -->
+    <param name="grid_map/p_miss" value="0.35" /> <!-- 未命中概率，射线穿过处的空闲概率 -->
+    <param name="grid_map/p_min" value="0.12" /> <!-- 最小占用概率下限 -->
+    <param name="grid_map/p_max" value="0.90" /> <!-- 最大占用概率上限 -->
+    <param name="grid_map/p_occ" value="0.80" /> <!-- 判定为占据的占用概率阈值 -->
+    <param name="grid_map/min_ray_length" value="0.1" /> <!-- 射线投射最短有效距离，单位 m -->
+    <param name="grid_map/max_ray_length" value="4.5" /> <!-- 射线投射最长有效距离，单位 m -->
+    <param name="grid_map/virtual_ceil_height" value="2.5" /> <!-- 虚拟天花板高度，用于地图可视化截断 -->
+    <param name="grid_map/visualization_truncate_height" value="2.4" /> <!-- 可视化高度截断阈值 -->
+    <param name="grid_map/show_occ_time" value="false" /> <!-- 是否在终端打印占用更新耗时 -->
+    <param name="grid_map/pose_type" value="2" /> <!-- 位姿来源类型：1 为 PoseStamped，2 为 Odometry -->
+    <param name="grid_map/frame_id" value="world" /> <!-- 地图参考坐标系名称 -->
+
+    <!-- astar 参数 -->
+    <param name="astar/resolution" value="0.1" /> <!-- 栅格分辨率 (m) -->
     <param name="astar/lambda_heu" value="1.0" /> <!-- 启发式权重系数 -->
     <param name="astar/allocated_node_num" value="1000000" /> <!-- 最大允许分配的节点数 -->
-    <!-- topic -->
-    <remap from="/grid_map/cloud" to="/map_generator/global_cloud" />
-    <remap from="~odom" to="/$(arg uav_id)/mavros/local_position/odom" />
-    <!-- ~ 加不加，取决于 C++ 源码中 NodeHandle 是全局 (nh) 还是私有 (nh("~"))，
-    以及订阅时写的是绝对路径还是相对路径。remap 的 from 必须和源码中的话题名精确匹配。 -->
+    <param name="astar/goal_tolerance" value="0.5" /> <!-- 终点容差 (m) -->
+
+    <remap from="/grid_map/cloud" to="/map_generator/global_cloud"/>
+    <remap from="/grid_map/odom" to="/$(arg uav_id)/mavros/local_position/odom_world"/>
+    <remap from="/grid_map/occupancy" to="/$(arg uav_id)/grid_map/occupancy"/>
+    <remap from="/grid_map/occupancy_inflate" to="/$(arg uav_id)/grid_map/occupancy_inflate"/>
+    <remap from="/grid_map/unknown" to="/$(arg uav_id)/grid_map/unknown"/>
+    <remap from="/astar/odom" to="/$(arg uav_id)/mavros/local_position/odom_world"/>
+    <!-- 分布式规划：轨迹统一输出到 /uavX/global_trajectory（与 kinoA* 全局层共用） -->
+    <remap from="/astar/trajectory" to="/$(arg uav_id)/global_trajectory"/>
+    <remap from="/astar/path_marker" to="/$(arg uav_id)/astar/path_marker"/>
+    <remap from="/astar/goal_marker" to="/$(arg uav_id)/astar/goal_marker"/>
   </node>
 
 </launch>
