@@ -1,0 +1,21 @@
+offsets:
+  uav0: [-1.0, -2.0, 0.0, 0.0]
+  uav1: [-1.0,  0.0, 0.0, 0.0]
+  uav2: [-1.0,  2.0, 0.0, 0.0]
+  uav3: [ 1.0, -2.0, 0.0, 0.0]
+  uav4: [ 1.0,  0.0, 0.0, 0.0]
+  uav5: [ 1.0,  2.0, 0.0, 0.0]
+
+agents:
+  uav0:
+    neighbors: [3]
+  uav1:
+    neighbors: [0, 2]
+  uav2:
+    neighbors: [5]
+  uav3:
+    neighbors: [4]
+  uav4:
+    neighbors: []
+  uav5:
+    neighbors: [4]

@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!-- 固定复杂障碍物（静态）场景，独立运行此节点即可查看场景 -->
+<!-- 完整对比实验请用: roslaunch form_nav formation_test.launch scene:=fixed -->
+<launch>
+  <arg name="left_x" default="-20.0" />   <!-- 场景左边缘 x，左边缘中心为 (left_x, center_y) -->
+  <arg name="center_y" default="0.0" />   <!-- 场景中心 y -->
+  <arg name="size_x" default="20.0" />    <!-- 场景长 (m) -->
+  <arg name="size_y" default="20.0" />    <!-- 场景宽 (m) -->
+  <arg name="size_z" default="3.0" />     <!-- 场景高 (m) -->
+  <arg name="resolution" default="0.1" /> <!-- 体素分辨率 (m) -->
+  <arg name="pub_rate" default="10.0" />  <!-- 发布频率 (Hz) -->
+  <arg name="frame_id" default="world" />
+  <arg name="rviz" default="false" />
+
+  <node pkg="form_nav" type="fixed_obs" name="fixed_obs" output="screen">
+    <param name="scene/left_x" value="$(arg left_x)" />
+    <param name="scene/center_y" value="$(arg center_y)" />
+    <param name="scene/size_x" value="$(arg size_x)" />
+    <param name="scene/size_y" value="$(arg size_y)" />
+    <param name="scene/size_z" value="$(arg size_z)" />
+    <param name="scene/resolution" value="$(arg resolution)" />
+    <param name="pub_rate" value="$(arg pub_rate)" />
+    <param name="frame_id" value="$(arg frame_id)" />
+  </node>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz" />
+</launch>

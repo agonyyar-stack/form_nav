@@ -3,6 +3,7 @@
 
 #include <ros/ros.h>
 #include <Eigen/Eigen>
+#include <limits>
 #include <queue>
 #include <unordered_map>
 #include <pcl/kdtree/kdtree_flann.h>
@@ -19,10 +20,10 @@ typedef pcl::PointXYZ PCLPoint;
 typedef pcl::PointCloud<PCLPoint> PCLPointCloud;
 typedef pcl::KdTreeFLANN<PCLPoint> KdTree; 
 
-#define inf (1 << 30);
-#define IN_OPEN_LIST_ 'a';
-#define IN_CLOSE_LIST_ 'b';
-#define NOT_EXPANDED_ 'c';
+constexpr double KINO_ASTAR_INF = std::numeric_limits<double>::infinity();
+constexpr char IN_OPEN_LIST_ = 'a';
+constexpr char IN_CLOSE_LIST_ = 'b';
+constexpr char NOT_EXPANDED_ = 'c';
 
 class KinoAstarNode
 {
@@ -39,10 +40,10 @@ public:
 
   KinoAstarNode()
   {
-    g_cost = inf;
-    f_cost = inf;
+    g_cost = KINO_ASTAR_INF;
+    f_cost = KINO_ASTAR_INF;
     parent = NULL;
-    duration = inf;
+    duration = KINO_ASTAR_INF;
     input = Eigen::Vector3d::Zero();
     node_state = NOT_EXPANDED_;
   }
@@ -84,7 +85,7 @@ private:
 public:
   void insert(Eigen::Vector3i index, KinoAstarNodePtr node)
   {
-    data_table_.insert(std::make_pair(index, node));
+    data_table_[index] = node;
   }
 
   KinoAstarNodePtr find(Eigen::Vector3i index)
@@ -125,6 +126,8 @@ private:
   std::vector<Eigen::Matrix3d> rot_list;
   std::vector<Eigen::Vector3d> path_velocities_;  // 与path同步采样速度
   std::vector<double> path_times_;                // 与path同步累计时间
+  std::vector<Eigen::Vector3d> acceleration_inputs_;
+  std::vector<double> primitive_sample_times_;
 
   /* main search parameters */
   int allocated_node_num_;
@@ -178,12 +181,13 @@ private:
   std::vector<double> cubic(double a, double b, double c, double d);
   std::vector<double> quartic(double a, double b, double c, double d, double e);
   bool computeShotTraj(Eigen::Vector3d x1, Eigen::Vector3d v1, Eigen::Vector3d x2, Eigen::Vector3d v2,
-                       double optimal_time);
+                       double& shot_time);
   std::vector<KinoAstarNodePtr> retrievePath(KinoAstarNodePtr end_node, std::vector<Eigen::Vector3d>& path_nodes_list);
   void samplePath(std::vector<KinoAstarNodePtr> path_pool, std::vector<Eigen::Vector3d>& path);
   void sampleEllipsoid(std::vector<KinoAstarNodePtr> path_pool, std::vector<Eigen::Vector3d>& path,
                        std::vector<Eigen::Matrix3d>& rot_list);
-  void StateTransit(Eigen::Matrix<double, 6, 1>& x0, Eigen::Matrix<double, 6, 1>& xt, Eigen::Vector3d ut, double dt);
+  void StateTransit(const Eigen::Matrix<double, 6, 1>& x0, Eigen::Matrix<double, 6, 1>& xt,
+                    const Eigen::Vector3d& ut, double dt);
 
   /* main se3 helper functions */
   void localCloudCallback(const sensor_msgs::PointCloud2ConstPtr& msg);
