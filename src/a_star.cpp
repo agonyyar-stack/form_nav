@@ -158,6 +158,10 @@ int Astar::search(Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, std::vector<
             tmp_node->g_cost = tmp_g_cost;
             tmp_node->parent = current_node;
             tmp_node->f_cost = tmp_node->g_cost + lambda_ * getDiagonalHeu(tmp_node->position, end_pt);
+            // 代价被更新后重新压入优先队列，保证按最新的 f_cost 排序；
+            // 队列中残留的旧条目在弹出时会被 IN_CLOSE_LIST_ 检查跳过。
+            tmp_node->node_state = IN_OPEN_LIST_;
+            open_list_.push(tmp_node);
           }
         }
   }
@@ -177,9 +181,15 @@ double Astar::getDiagonalHeu(Eigen::Vector3d x1, Eigen::Vector3d x2) //功能：
   double dx = std::abs(x1(0) - x2(0));
   double dy = std::abs(x1(1) - x2(1));
   double dz = std::abs(x1(2) - x2(2));
+  // 面/棱/角邻接代价分别为 1 / √2 / √3 时，三维 26 邻域的精确最短距离：
+  // 排序 dx >= dy >= dz 后，最短路径 = (dx-dy) 次面邻接 + (dy-dz) 次棱邻接 + dz 次角邻接。
+  double max_xyz = std::max({ dx, dy, dz });
   double min_xyz = std::min({ dx, dy, dz });
-  double h = dx + dy + dz + (std::sqrt(3) - 3) * min_xyz;
-  return tie_breaker_ * h;
+  double mid_xyz = dx + dy + dz - max_xyz - min_xyz;
+  double h = (max_xyz - mid_xyz) + std::sqrt(2.0) * (mid_xyz - min_xyz) +
+             std::sqrt(3.0) * min_xyz;
+  // 不再乘 tie_breaker_：任何 >1 的系数都会破坏可采纳性，无法保证最短路径。
+  return h;
 }
 
 // Eigen::Vector3i Astar::posToIndex(Eigen::Vector3d pos) {
