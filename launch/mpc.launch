@@ -45,7 +45,7 @@
         <param name="mpc/ipopt_max_iter" value="100" />   <!-- IPOPT 最大迭代次数 -->
         <param name="mpc/ipopt_tol" value="1e-6" />       <!-- IPOPT 收敛容差 -->
 
-        <param name="mpc/w_u" value="50.0" />              <!-- 控制输入惩罚 -->
+        <param name="mpc/w_u" value="10.0" />              <!-- 控制输入惩罚 -->
         <param name="mpc/w_du" value="100.0" />             <!-- 控制增量惩罚（抑制指令抖动） -->
 
         <param name="mpc/a_brake" value="0.0" />            <!-- 制动加速度 (m/s^2)，0 表示自动取 0.8*u_max -->

@@ -6,11 +6,19 @@ Panels:
       Expanded:
         - /Global Options1
         - /UAV01
-        - /UAV01/kinoA*1
+        - /UAV01/global_path1
+        - /UAV01/global_path1/Astar1
+        - /UAV11/glpbal_path1
+        - /UAV11/glpbal_path1/Astar1
+        - /UAV21/glpbal_path1
+        - /UAV21/glpbal_path1/Astar1
         - /UAV21/MPC1/mpc_trajectory1
-        - /UAV31/kinoAstar1
-        - /UAV41/kinoAstar1
-        - /UAV51/kinoAstar1
+        - /UAV31/glpbal_path1
+        - /UAV31/glpbal_path1/Astar1
+        - /UAV41/glpbal_path1
+        - /UAV41/glpbal_path1/Astar1
+        - /UAV51/glpbal_path1
+        - /UAV51/glpbal_path1/Astar1
       Splitter Ratio: 0.5833333134651184
     Tree Height: 1492
   - Class: rviz/Selection
@@ -116,7 +124,7 @@ Visualization Manager:
           Marker Topic: /uav0/kino_astar/goal_marker
           Name: GoalPoint_uav0
           Namespaces:
-            {}
+            kino_astar/goal: true
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -176,7 +184,7 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: false
               Marker Topic: /uav0_kino_astar_node/kino_astar_path_nodes
-              Name: kinoA*_path_nodes_uav0
+              Name: kinoAstar_path_nodes
               Namespaces:
                 {}
               Queue Size: 100
@@ -184,13 +192,21 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: true
               Marker Topic: /uav0/kino_astar/path_marker
-              Name: kinoA*_path_marker_uav0
+              Name: kinoAstar_path
+              Namespaces:
+                {}
+              Queue Size: 100
+              Value: true
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav0/astar/path_marker
+              Name: Astar
               Namespaces:
                 {}
               Queue Size: 100
               Value: true
           Enabled: true
-          Name: kinoA*
+          Name: global_path
         - Class: rviz/Group
           Displays:
             - Alpha: 1
@@ -256,7 +272,7 @@ Visualization Manager:
           Marker Topic: /uav1/kino_astar/goal_marker
           Name: GoalPoint_uav1
           Namespaces:
-            {}
+            kino_astar/goal: true
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -316,7 +332,7 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: false
               Marker Topic: /uav1_kino_astar_node/kino_astar_path_nodes
-              Name: kinoA*_path_nodes_uav1
+              Name: kinoAstar_path_nodes
               Namespaces:
                 {}
               Queue Size: 100
@@ -324,13 +340,21 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: true
               Marker Topic: /uav1/kino_astar/path_marker
-              Name: kinoA*_path_marker_uav1
+              Name: kinoAstar_path
+              Namespaces:
+                kino_astar/path: true
+              Queue Size: 100
+              Value: true
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav1/astar/path_marker
+              Name: Astar
               Namespaces:
                 {}
               Queue Size: 100
               Value: true
           Enabled: true
-          Name: kinoAstar
+          Name: glpbal_path
         - Class: rviz/Group
           Displays:
             - Alpha: 1
@@ -396,7 +420,7 @@ Visualization Manager:
           Marker Topic: /uav2/kino_astar/goal_marker
           Name: GoalPoint_uav2
           Namespaces:
-            {}
+            kino_astar/goal: true
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -456,7 +480,7 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: false
               Marker Topic: /uav2_kino_astar_node/kino_astar_path_nodes
-              Name: kinoA*_path_nodes_uav2
+              Name: kinoAstar_path_nodes
               Namespaces:
                 {}
               Queue Size: 100
@@ -464,13 +488,21 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: true
               Marker Topic: /uav2/kino_astar/path_marker
-              Name: kinoA*_path_marker_uav2
+              Name: kinoAstar_path
+              Namespaces:
+                kino_astar/path: true
+              Queue Size: 100
+              Value: true
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav2/astar/path_marker
+              Name: Astar
               Namespaces:
                 {}
               Queue Size: 100
               Value: true
           Enabled: true
-          Name: kinoAstar
+          Name: glpbal_path
         - Class: rviz/Group
           Displays:
             - Alpha: 1
@@ -506,7 +538,8 @@ Visualization Manager:
               Marker Topic: /uav2/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -536,7 +569,7 @@ Visualization Manager:
           Marker Topic: /uav3/kino_astar/goal_marker
           Name: GoalPoint_uav3
           Namespaces:
-            {}
+            kino_astar/goal: true
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -596,7 +629,7 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: false
               Marker Topic: /uav3_kino_astar_node/kino_astar_path_nodes
-              Name: kinoA*_path_nodes_uav3
+              Name: kinoAstar_path_nodes
               Namespaces:
                 {}
               Queue Size: 100
@@ -604,13 +637,21 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: true
               Marker Topic: /uav3/kino_astar/path_marker
-              Name: kinoA*_path_marker_uav3
+              Name: kinoAstar_path
+              Namespaces:
+                {}
+              Queue Size: 100
+              Value: true
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav3/astar/path_marker
+              Name: Astar
               Namespaces:
                 {}
               Queue Size: 100
               Value: true
           Enabled: true
-          Name: kinoAstar
+          Name: glpbal_path
         - Class: rviz/Group
           Displays:
             - Alpha: 1
@@ -676,7 +717,7 @@ Visualization Manager:
           Marker Topic: /uav4/kino_astar/goal_marker
           Name: GoalPoint_uav4
           Namespaces:
-            {}
+            kino_astar/goal: true
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -736,7 +777,7 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: false
               Marker Topic: /uav4_kino_astar_node/kino_astar_path_nodes
-              Name: kinoA*_path_nodes_uav4
+              Name: kinoAstar_path_nodes
               Namespaces:
                 {}
               Queue Size: 100
@@ -744,13 +785,21 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: true
               Marker Topic: /uav4/kino_astar/path_marker
-              Name: kinoA*_path_marker_uav4
+              Name: kinoAstar_path
+              Namespaces:
+                kino_astar/path: true
+              Queue Size: 100
+              Value: true
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav4/astar/path_marker
+              Name: Astar
               Namespaces:
                 {}
               Queue Size: 100
               Value: true
           Enabled: true
-          Name: kinoAstar
+          Name: glpbal_path
         - Class: rviz/Group
           Displays:
             - Alpha: 1
@@ -786,7 +835,8 @@ Visualization Manager:
               Marker Topic: /uav4/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -816,7 +866,7 @@ Visualization Manager:
           Marker Topic: /uav5/kino_astar/goal_marker
           Name: GoalPoint_uav5
           Namespaces:
-            {}
+            kino_astar/goal: true
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -876,7 +926,7 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: false
               Marker Topic: /uav5_kino_astar_node/kino_astar_path_nodes
-              Name: kinoA*_path_nodes_uav5
+              Name: kinoAstar_path_nodes
               Namespaces:
                 {}
               Queue Size: 100
@@ -884,13 +934,21 @@ Visualization Manager:
             - Class: rviz/Marker
               Enabled: true
               Marker Topic: /uav5/kino_astar/path_marker
-              Name: kinoA*_path_marker_uav5
+              Name: kinoAstar_path
+              Namespaces:
+                kino_astar/path: true
+              Queue Size: 100
+              Value: true
+            - Class: rviz/Marker
+              Enabled: true
+              Marker Topic: /uav5/astar/path_marker
+              Name: Astar
               Namespaces:
                 {}
               Queue Size: 100
               Value: true
           Enabled: true
-          Name: kinoAstar
+          Name: glpbal_path
         - Class: rviz/Group
           Displays:
             - Alpha: 1
@@ -926,7 +984,8 @@ Visualization Manager:
               Marker Topic: /uav5/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -969,17 +1028,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -12.97614860534668
-        Y: 1.897646427154541
-        Z: -8.717392921447754
+        X: -13.714839935302734
+        Y: 4.106709957122803
+        Z: -7.715541362762451
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.339796543121338
+      Pitch: 1.119796633720398
       Target Frame: <Fixed Frame>
-      Yaw: 4.663569450378418
+      Yaw: 4.663567066192627
     Saved: ~
 Window Geometry:
   Displays:
