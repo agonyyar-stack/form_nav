@@ -93,8 +93,9 @@ Function Mpc::setKinematicEquation() {
         -vw/Lw+Kw*uw/Lw});
     return Function("kinematic_equation", {state_vars, control_vars}, {rhs}); 
 }
-// 保存按累计时间排列的全局轨迹。局部参考在每次 solve 前进行数值采样，
-// 避免把 CasADi interpolant 放进 Opti 符号图后被 expand 转为 SX。
+// 保存按路径顺序排列的全局轨迹。路径进度用累积弧长表示，局部参考在
+// 每次 solve 前进行数值采样，避免把 CasADi interpolant 放进 Opti 符号图
+// 后被 expand 转为 SX。
 void Mpc::setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj) {
     global_traj_ = traj;
     has_global_traj_ = !traj.empty();
@@ -104,6 +105,8 @@ void Mpc::setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj) {
     has_last_solution_ = false;
     last_pred_x_.resize(0, 0);
     last_u_.resize(0, 0);
+    // 投影进度从头开始
+    last_progress_idx_ = 0;
 
     // 预计算累积弧长表，供滚动子目标沿弧长前推
     path_arclength_.resize(global_traj_.size());
@@ -116,42 +119,61 @@ void Mpc::setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj) {
         path_arclength_[i] = path_arclength_[i - 1] + (cur - prev).norm();
     }
 
-    std::cout << "[MPC] Global trajectory set with " << traj.size() << " waypoints, t ∈ ["
-              << traj.front().t << ", " << traj.back().t << "]" << std::endl;
+    std::cout << "[MPC] Global trajectory set with " << traj.size()
+              << " waypoints, arc ∈ [0, "
+              << path_arclength_.back() << "] m" << std::endl;
 }
 
-GlobalWaypoint Mpc::interpolateGlobalTrajectory(double t) const {
-    if (global_traj_.empty()) return GlobalWaypoint{};
-    if (t <= global_traj_.front().t) return global_traj_.front();
-    if (t >= global_traj_.back().t) return global_traj_.back();
+// 将物理位置投影到全局轨迹：在最近点索引附近窗口内搜索，返回最近路径点
+// 的累积弧长 s0。窗口命中边界时做一次全量搜索兜底；路径进度保持单调，
+// 避免无人机在弯道或局部回头时跳回旧路径段。
+double Mpc::projectToPath(const Eigen::Vector3d& query_pos) {
+    if (!has_global_traj_ || global_traj_.empty() ||
+        path_arclength_.size() != global_traj_.size()) {
+        return 0.0;
+    }
 
-    auto upper = std::lower_bound(
-        global_traj_.begin(), global_traj_.end(), t,
-        [](const GlobalWaypoint& waypoint, double query_time) {
-            return waypoint.t < query_time;
-        });
-    const GlobalWaypoint& next = *upper;
-    const GlobalWaypoint& previous = *(upper - 1);
-    const double interval = next.t - previous.t;
-    const double ratio = interval > 0.0 ? (t - previous.t) / interval : 0.0;
-    const auto lerp = [ratio](double from, double to) {
-        return from + ratio * (to - from);
-    };
+    const size_t n = global_traj_.size();
+    const int win_back = 3, win_forward = 30;    // 搜索窗口: [last-3, last+30]
+    const int last = static_cast<int>(std::min(last_progress_idx_, n - 1));
 
-    GlobalWaypoint result;
-    result.t = t;
-    result.x = lerp(previous.x, next.x);
-    result.y = lerp(previous.y, next.y);
-    result.z = lerp(previous.z, next.z);
-    result.yaw = lerp(previous.yaw, next.yaw);
-    result.vx = lerp(previous.vx, next.vx);
-    result.vy = lerp(previous.vy, next.vy);
-    result.vz = lerp(previous.vz, next.vz);
-    result.vyaw = lerp(previous.vyaw, next.vyaw);
-    return result;
+    int lo = std::max(0, last - win_back);
+    int hi = std::min(static_cast<int>(n) - 1, last + win_forward);
+
+    double min_dist = 1e9;
+    int closest = lo;
+    for (int i = lo; i <= hi; ++i) {
+        double dx = query_pos.x() - global_traj_[i].x;
+        double dy = query_pos.y() - global_traj_[i].y;
+        double dz = query_pos.z() - global_traj_[i].z;
+        double d2 = dx*dx + dy*dy + dz*dz;
+        if (d2 < min_dist) {
+            min_dist = d2;
+            closest = i;
+        }
+    }
+
+    // 如果最近点落在窗口边界附近, 扩展一次全量搜索做安全重置
+    if (closest == hi || closest == lo) {
+        for (size_t i = 0; i < n; ++i) {
+            double dx = query_pos.x() - global_traj_[i].x;
+            double dy = query_pos.y() - global_traj_[i].y;
+            double dz = query_pos.z() - global_traj_[i].z;
+            double d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 < min_dist) {
+                min_dist = d2;
+                closest = static_cast<int>(i);
+            }
+        }
+    }
+
+    // 路径进度保持单调，避免跳回旧路径段
+    if (closest < last) closest = last;
+    last_progress_idx_ = static_cast<size_t>(closest);
+    return path_arclength_[closest];
 }
 
-GlobalWaypoint Mpc::selectRollingGoal(double t0) {
+GlobalWaypoint Mpc::selectRollingGoal(double s0) {
     GlobalWaypoint goal;
     has_rolling_goal_ = false;
     if (!has_global_traj_ || global_traj_.empty() ||
@@ -159,20 +181,25 @@ GlobalWaypoint Mpc::selectRollingGoal(double t0) {
         return goal;
     }
 
-    const double t_front = global_traj_.front().t;
-    const double t_end = global_traj_.back().t;
-    const double t_clamped = std::min(std::max(t0, t_front), t_end);
-
-    // 按累计时间二分找到不超过 t_clamped 的最近航点索引
-    auto upper = std::lower_bound(
-        global_traj_.begin(), global_traj_.end(), t_clamped,
-        [](const GlobalWaypoint& wp, double query_time) {
-            return wp.t < query_time;
-        });
-    size_t i0 = static_cast<size_t>(std::distance(global_traj_.begin(), upper));
-    if (i0 > 0 && global_traj_[i0].t > t_clamped) --i0;
+    const double total = path_arclength_.back();
+    const double s_clamped = std::min(std::max(s0, 0.0), total);
 
     // 已到轨迹末端：子目标即终点
+    if (s_clamped >= total) {
+        goal = global_traj_.back();
+        goal.vyaw = 0.0;
+        has_rolling_goal_ = true;
+        rolling_goal_ = goal;
+        return goal;
+    }
+
+    // 按累积弧长二分定位 s_clamped 所在段 [i0, i0+1)
+    auto upper = std::lower_bound(path_arclength_.begin(),
+                                  path_arclength_.end(), s_clamped);
+    size_t i0 = static_cast<size_t>(std::distance(path_arclength_.begin(), upper));
+    if (i0 >= path_arclength_.size() || path_arclength_[i0] > s_clamped) {
+        if (i0 > 0) --i0;
+    }
     if (i0 >= global_traj_.size() - 1) {
         goal = global_traj_.back();
         goal.vyaw = 0.0;
@@ -182,22 +209,36 @@ GlobalWaypoint Mpc::selectRollingGoal(double t0) {
     }
 
     // 沿弧长前推 lookahead_distance_
-    const double target_arc = path_arclength_[i0] + std::max(0.0, lookahead_distance_);
-    size_t i1 = i0;
-    while (i1 + 1 < global_traj_.size() &&
-           path_arclength_[i1 + 1] < target_arc) {
-        ++i1;
-    }
-    if (i1 >= global_traj_.size() - 1) {
+    const double target_arc = s_clamped + std::max(0.0, lookahead_distance_);
+    if (target_arc >= total) {
         goal = global_traj_.back();
     } else {
-        const double seg_len = path_arclength_[i1 + 1] - path_arclength_[i1];
-        const double ratio = seg_len > 0.0
-                                 ? (target_arc - path_arclength_[i1]) / seg_len
-                                 : 0.0;
-        const double t_g = global_traj_[i1].t +
-                           ratio * (global_traj_[i1 + 1].t - global_traj_[i1].t);
-        goal = interpolateGlobalTrajectory(std::min(t_g, t_end));
+        auto upper2 = std::lower_bound(path_arclength_.begin(),
+                                       path_arclength_.end(), target_arc);
+        size_t i1 = static_cast<size_t>(std::distance(path_arclength_.begin(), upper2));
+        if (i1 >= path_arclength_.size() || path_arclength_[i1] > target_arc) {
+            if (i1 > 0) --i1;
+        }
+        if (i1 >= global_traj_.size() - 1) {
+            goal = global_traj_.back();
+        } else {
+            const double seg_len = path_arclength_[i1 + 1] - path_arclength_[i1];
+            const double ratio = seg_len > 0.0
+                                     ? (target_arc - path_arclength_[i1]) / seg_len
+                                     : 0.0;
+            const auto lerp = [ratio](double from, double to) {
+                return from + ratio * (to - from);
+            };
+            const GlobalWaypoint& wp0 = global_traj_[i1];
+            const GlobalWaypoint& wp1 = global_traj_[i1 + 1];
+            goal.x = lerp(wp0.x, wp1.x);
+            goal.y = lerp(wp0.y, wp1.y);
+            goal.z = lerp(wp0.z, wp1.z);
+            goal.yaw = lerp(wp0.yaw, wp1.yaw);
+            goal.vx = lerp(wp0.vx, wp1.vx);
+            goal.vy = lerp(wp0.vy, wp1.vy);
+            goal.vz = lerp(wp0.vz, wp1.vz);
+        }
     }
     // 子目标只使用位置/偏航（yaw 参考恒 0），速度字段不使用
     goal.vyaw = 0.0;
@@ -567,7 +608,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     return true;
 }
 
-bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states) {
+bool Mpc::solve(double s0, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states) {
     // 控制节点负责等待传感器和全局轨迹；这里再做一次尺寸检查，避免
     // 未初始化状态进入 CasADi 参数并产生难以定位的维度错误。
     if (current_states.size() != 8) {
@@ -590,7 +631,7 @@ bool Mpc::solve(double t, const std::vector<UavState>& neighbors, Eigen::VectorX
 
     // 滚动子目标：沿弧长从最近投影点前推 lookahead_distance_。
     // 全局轨迹只提供方向引导，整个预测时域跟踪同一个子目标点。
-    rolling_goal_ = selectRollingGoal(t);
+    rolling_goal_ = selectRollingGoal(s0);
     if (!has_rolling_goal_) {
         std::cerr << "[MPC] Failed to select rolling goal." << std::endl;
         return false;

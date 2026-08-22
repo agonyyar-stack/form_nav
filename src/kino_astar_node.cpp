@@ -119,11 +119,10 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
       path_marker_pub.publish(path_marker);
     }
 
-    // --- 带编号的全局轨迹: 每点 [t,x,y,z,vx,vy,vz] ---
+    // --- 带编号的全局轨迹: 每点 [x,y,z,vx,vy,vz] ---
     {
       const auto& velocities = kino_astar_->getPathVelocities();
-      const auto& times = kino_astar_->getPathTimes();
-      size_t n = std::min({path.size(), velocities.size(), times.size()});
+      size_t n = std::min(path.size(), velocities.size());
       if (n == 0)
       {
         ROS_WARN("Kinodynamic A* returned an empty sampled trajectory");
@@ -137,10 +136,9 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
       traj_msg.trajectory_id = next_trajectory_id++;
       if (next_trajectory_id == 0) next_trajectory_id = 1;
       traj_msg.steps = n;
-      traj_msg.waypoints.reserve(n * 7);
+      traj_msg.waypoints.reserve(n * 6);
       for (size_t i = 0; i < n; i++)
       {
-        traj_msg.waypoints.push_back(times[i]);
         traj_msg.waypoints.push_back(path[i][0]);
         traj_msg.waypoints.push_back(path[i][1]);
         traj_msg.waypoints.push_back(path[i][2]);

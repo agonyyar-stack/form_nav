@@ -7,7 +7,7 @@
   <arg name="size_x" default="20.0" />    <!-- 场景长 (m) -->
   <arg name="size_y" default="20.0" />    <!-- 场景宽 (m) -->
   <arg name="size_z" default="3.0" />     <!-- 场景高 (m) -->
-  <arg name="resolution" default="0.1" /> <!-- 体素分辨率 (m) -->
+  <arg name="resolution" default="0.2" /> <!-- 体素分辨率 (m)，即点云间距 -->
   <arg name="pub_rate" default="10.0" />  <!-- 发布频率 (Hz) -->
   <arg name="frame_id" default="world" />
   <arg name="rviz" default="false" />

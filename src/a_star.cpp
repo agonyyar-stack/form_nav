@@ -8,6 +8,7 @@ void Astar::setParam(ros::NodeHandle& nh)
   nh.param("astar/resolution", resolution_, 0.1);
   nh.param("astar/lambda_heu", lambda_, 1.0);
   nh.param("astar/allocated_node_num", allocated_node_num_, 100000);
+  nh.param("astar/goal_tolerance", goal_tolerance_, 0.5);
 }
 
 void Astar::init()
@@ -54,6 +55,11 @@ int Astar::search(Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, std::vector<
     std::cerr << "Error: end_pt is out of map." << std::endl;
     return NO_PATH_FOUND;
   }
+  if (use_node_num_ >= allocated_node_num_)
+  {
+    std::cerr << "Error: allocated_node_num is too small (start node)." << std::endl;
+    return NO_PATH_FOUND;
+  }
   // 将起点加入open_list中，并初始化其g_cost和f_cost
   PathNodePtr start_node = path_node_pool_[use_node_num_];  // bug fixed
   start_node->g_cost = 0.0;
@@ -71,13 +77,16 @@ int Astar::search(Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, std::vector<
     // 从open_list中取出f_cost最小的节点current_node，并加入close_list
     PathNodePtr current_node = open_list_.top();
     open_list_.pop();
+    // 同一节点可能因代价更新被多次压入，跳过已闭合的旧条目
+    if (current_node->node_state == IN_CLOSE_LIST_)
+    {
+      continue;
+    }
     current_node->node_state = IN_CLOSE_LIST_;
     close_list_.insert(current_node->position, current_node);
 
-    // 如果当前节点已经到达目标点，则返回路径
-    if (abs(current_node->position(0) - end_pt(0)) < resolution_ &&
-        abs(current_node->position(1) - end_pt(1)) < resolution_ &&
-        abs(current_node->position(2) - end_pt(2)) < resolution_)
+    // 如果当前节点已经进入终点容差范围，则返回路径
+    if ((current_node->position - end_pt).norm() < goal_tolerance_)
     {
       ros::Time end_time = ros::Time::now();
       std::cout << "reached end_pt" << std::endl;
@@ -86,6 +95,14 @@ int Astar::search(Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, std::vector<
       std::cout << "use_node_num: " << use_node_num_ << std::endl;
       std::cout << "total_cost:" << end_node->g_cost << std::endl;
       retrievePath(end_node, path);
+      // 若终点到已搜索到的末端点的直线段无碰撞，则把精确终点追加进路径，
+      // 使 MPC 的停靠目标与用户目标（+编队偏移）严格一致（kinoA* 的 shot 段
+      // 起同样作用）；有碰撞时保留当前末端，避免穿障。
+      if (!path.empty() && (path.back() - end_pt).norm() > 1e-6 &&
+          isSegmentCollisionFree(path.back(), end_pt))
+      {
+        path.push_back(end_pt);
+      }
       return REACH_END;
     }
     // 遍历当前节点的邻居节点，更新邻居节点的g_cost和f_cost，并将其加入open_list中
@@ -121,6 +138,11 @@ int Astar::search(Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, std::vector<
 
           if (tmp_node == NULL)
           {
+            if (use_node_num_ >= allocated_node_num_)
+            {
+              std::cerr << "Error: allocated_node_num is too small." << std::endl;
+              return NO_PATH_FOUND;
+            }
             PathNodePtr neighbor_node = path_node_pool_[use_node_num_];
             use_node_num_ += 1;
             neighbor_node->g_cost = tmp_g_cost;
@@ -130,17 +152,16 @@ int Astar::search(Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, std::vector<
             neighbor_node->node_state = IN_OPEN_LIST_;
             open_list_.push(neighbor_node);
             expanded_nodes_.insert(neighbor_node->position, neighbor_node);
-            if (use_node_num_ >= allocated_node_num_)
-            {
-              std::cerr << "Error: allocated_node_num is too small." << std::endl;
-              return NO_PATH_FOUND;
-            }
           }
           else if (tmp_g_cost < tmp_node->g_cost)
           {
             tmp_node->g_cost = tmp_g_cost;
             tmp_node->parent = current_node;
             tmp_node->f_cost = tmp_node->g_cost + lambda_ * getDiagonalHeu(tmp_node->position, end_pt);
+            // 代价被更新后重新压入优先队列，保证按最新的 f_cost 排序；
+            // 队列中残留的旧条目在弹出时会被 IN_CLOSE_LIST_ 检查跳过。
+            tmp_node->node_state = IN_OPEN_LIST_;
+            open_list_.push(tmp_node);
           }
         }
   }
@@ -160,9 +181,15 @@ double Astar::getDiagonalHeu(Eigen::Vector3d x1, Eigen::Vector3d x2) //功能：
   double dx = std::abs(x1(0) - x2(0));
   double dy = std::abs(x1(1) - x2(1));
   double dz = std::abs(x1(2) - x2(2));
+  // 面/棱/角邻接代价分别为 1 / √2 / √3 时，三维 26 邻域的精确最短距离：
+  // 排序 dx >= dy >= dz 后，最短路径 = (dx-dy) 次面邻接 + (dy-dz) 次棱邻接 + dz 次角邻接。
+  double max_xyz = std::max({ dx, dy, dz });
   double min_xyz = std::min({ dx, dy, dz });
-  double h = dx + dy + dz + (std::sqrt(3) - 3) * min_xyz;
-  return tie_breaker_ * h;
+  double mid_xyz = dx + dy + dz - max_xyz - min_xyz;
+  double h = (max_xyz - mid_xyz) + std::sqrt(2.0) * (mid_xyz - min_xyz) +
+             std::sqrt(3.0) * min_xyz;
+  // 不再乘 tie_breaker_：任何 >1 的系数都会破坏可采纳性，无法保证最短路径。
+  return h;
 }
 
 // Eigen::Vector3i Astar::posToIndex(Eigen::Vector3d pos) {
@@ -183,6 +210,23 @@ void Astar::retrievePath(PathNodePtr end_node, std::vector<Eigen::Vector3d>& pat
   }
   path.push_back(current_node->position);
   std::reverse(path.begin(), path.end());
+}
+
+bool Astar::isSegmentCollisionFree(const Eigen::Vector3d& from, const Eigen::Vector3d& to)
+{
+  const double seg_len = (to - from).norm();
+  const double step = std::max(0.5 * resolution_, 0.05);
+  const int samples = std::max(2, static_cast<int>(std::ceil(seg_len / step)) + 1);
+  for (int i = 0; i < samples; ++i)
+  {
+    const double ratio = static_cast<double>(i) / static_cast<double>(samples - 1);
+    const Eigen::Vector3d pt = from + ratio * (to - from);
+    if (!grid_map_->isInMap(pt) || grid_map_->getInflateOccupancy(pt) != 0)
+    {
+      return false;
+    }
+  }
+  return true;
 }
 
 void Astar::setGridMap(GridMap::Ptr& grid_map)

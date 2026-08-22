@@ -1,9 +1,11 @@
 <launch>
     <!-- random=随机障碍物, fixed=固定复杂场景 -->
     <arg name="scene" default="random" />
+    <!-- 全局层算法选择: kino_astar=kinodynamic A*, astar=纯 A* -->
+    <arg name="global_planner" default="astar" />
 
     <!-- gazebo -->
-    <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">
+    <include file="$(find form_nav)/launch/single_uav_gazebo.launch">
     </include>
 
     <group unless="$(eval arg('scene') == 'fixed')">
@@ -60,12 +62,23 @@
         <param name="uav_id" value="uav0" />
     </include>
 
-    <!-- 全局规划器-->
+    <!-- 全局规划器（kinoA*） -->
+    <group if="$(eval arg('global_planner') == 'kino_astar')">
     <include file="$(find form_nav)/launch/kino_astar_grid.launch">
         <arg name="uav_id" value="uav0" />
         <arg name="my_id" value="0" />
         <arg name="formation_config_file" value="$(find form_nav)/config/single_uav.yaml" />
     </include>
+    </group>
+
+    <!-- 全局规划器（纯 A*） -->
+    <group if="$(eval arg('global_planner') == 'astar')">
+    <include file="$(find form_nav)/launch/astar_grid.launch">
+        <arg name="uav_id" value="uav0" />
+        <arg name="my_id" value="0" />
+        <arg name="formation_config_file" value="$(find form_nav)/config/single_uav.yaml" />
+    </include>
+    </group>
 
     <!-- 局部 MPC -->
     <include file="$(find form_nav)/launch/mpc.launch">

@@ -66,8 +66,8 @@
     <remap from="/grid_map/occupancy_inflate" to="/$(arg uav_id)/grid_map/occupancy_inflate"/>
     <remap from="/grid_map/unknown" to="/$(arg uav_id)/grid_map/unknown"/>
     <remap from="/kino_astar/odom" to="/$(arg uav_id)/mavros/local_position/odom_world"/>
-    <!-- 分布式规划：轨迹与可视化话题按无人机命名空间隔离 -->
-    <remap from="/kino_astar/trajectory" to="/$(arg uav_id)/kino_astar/trajectory"/>
+    <!-- 分布式规划：轨迹统一输出到 /uavX/global_trajectory（与 A* 全局层共用） -->
+    <remap from="/kino_astar/trajectory" to="/$(arg uav_id)/global_trajectory"/>
     <remap from="/kino_astar/path_marker" to="/$(arg uav_id)/kino_astar/path_marker"/>
     <remap from="/kino_astar/goal_marker" to="/$(arg uav_id)/kino_astar/goal_marker"/>
   </node>
