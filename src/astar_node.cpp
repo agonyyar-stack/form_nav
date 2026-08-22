@@ -107,7 +107,7 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
       path_marker.scale.x = 0.04;
       path_marker.scale.y = 0.08;
       path_marker.scale.z = 0.08;
-      path_marker.color.a = 0.8;
+      path_marker.color.a = 0.6;
       path_marker.color.r = 0.6;
       path_marker.color.g = 0.6;
       path_marker.color.b = 0.6;

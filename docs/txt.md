@@ -1,28 +1,27 @@
-背景：我的主要开发环境是 Ubuntu 20.04、ROS Noetic、PX4以及gazebo，现在要研究一个无人机编队导航算法：用kinodynamicA*进行全局轨迹规划，然后mpc再进行局部规划和编队跟踪。局部规划考虑动态和静态
-  避障，采用分布式规划；全局规划采用集中式（考虑到分布式规划会出现路径交叉的问题）；全局规划的作用是提供全局路径引导避免局部最优以及为mpc提供较好的优化初始值，全局+局部跑通之后再加入rl动
-  态调节mpc代价函数的权重矩阵以及预测时域，整个算法仿真做好后再进行实机实验，然后写一篇论文。目前卡到了一个地方：因为之前复现过一篇利用lmpc（mpc的基础上增加利用反
-  步法求解出的辅助控制器约束保证系统李雅普诺夫稳定性）进行编队追踪包围的论文（原文路径～/catkin_ws/src/form_nav/Model Predictive Formation Tracking-Containment Control for Multi-UAVs With Obstacle
-  Avoidance2024TSMC.pdf），所以现在沿用之前的算法，也使用lmpc并采用casadi的ipopt求解器求解最优（若没有更适合的求解器）。但是原论文直接将障碍物的中心位置给出并仅考虑与中心位置的距离，而我的算法框架加入了感知模
-  块，要处理障碍物点云。一开始处理为esdf地图，然后利用三线插值的方法使其代价函数的障碍物距离惩罚项可以被求导从而进行求解，但是发现出现了两个致命问题：求解器与插值器难以兼容且计算量巨大。
-  所以打算参考～/catkin_ws/src/form_nav/Mapless Collision-Free Flight via MPC using Dual KD-Trees in Cluttered.pdf所示的论文提出的方法，利用当前状态->建立 obatacle KD-tree->根据当前参考点查询最近障碍点->构造 MPC
-  cost->IPOPT 优化这种方式来处理障碍物距离惩罚。然后由此有了一个想法是用采样的思想先为mpc找到一个较好的预测初始值（因为考虑到虽然全局路径已经提供了一个初始值，但是对每个无人机做路径偏移
-  时很大概率会穿过障碍物以及编队规划的需求还有动态障碍物使这个初始值不再适用），如果这个方法可以减少e整体的计算量的话就可以使用。自己的算法文件路径为/home/raner/catkin_ws/src/
-  form_nav，然后参考的论文算法代码路径为/home/raner/catkin_ws/src/Avoid-MPC/roswrapper/ros/src/avoid_mpc。鉴于算法一直报错，所以重新按“1.单无人机mpc仅跟踪全局路径->2.编队跟踪->3.加入kdtree，mpc加入静态避障->4.加入动态避障->5.加入稳定性约束->6.加入主动提供较好mpc优化初始值"的步骤完成算法编写，每一步先能跑通再进行下一步算法的编写，目前在第一阶段。
-问题：局部规划跟踪效果不好，到达终点后原地振荡
-
 codex resume 019f89af-26ae-7f82-9cf3-ba8a3e52f8a7 57倍问题（角速度）
 
 txt文件以及空目录不要动，另外再根据情况修改.gitignore文件
 
-背景：我的主要开发环境是 Ubuntu 20.04、ROS Noetic、PX4以及gazebo，现在要研究一个无人机编队导航算法：用kinodynamicA*进行全局轨迹规划，然后mpc再进行局部规划和编队跟踪。局部规划考虑动态和静态
-  避障，采用分布式规划；全局规划采用集中式（考虑到分布式规划会出现路径交叉的问题）；全局规划的作用是提供全局路径引导避免局部最优以及为mpc提供较好的优化初始值，全局+局部跑通之后再加入rl动
-  态调节mpc代价函数的权重矩阵以及预测时域，整个算法仿真做好后再进行实机实验，然后写一篇论文。自己的算法文件路径为/home/raner/catkin_ws/src/
-  form_nav。计划按“1.单无人机mpc仅跟踪全局路径->2.编队跟踪->3.加入kdtree，mpc加入静态避障->4.加入动态避障->5.加入稳定性约束->6.加入主动提供较好mpc优化初始值"的步骤逐步完善算法，每一步先能跑通再进行下一步算法的编写，目前在第一阶段。
-目前遇到的问题是：无人机到达终点后会一直在原地振荡，增加全局轨迹的速度跟踪也无法解决。推测问题根源是无人机到达终点后还在持续运行mpc跟踪全局路径，持续发布速度指令，然后又因为一直不能收敛，导致出现不规则振荡且不会随着时间减弱。
-所以现在想到的处理方式是:1.恢复代码中被注释掉（因为一直报错）的稳定性约束（理论依据参考了/catkin_ws/src/form_nav/Model Predictive Formation Tracking-Containment Control for Multi-UAVs With Obstacle
-  Avoidance2024TSMC.pdf论文），但是还要做一些修改来处理报错问题;2.到达终点悬停，不再求解mpc，同时发布"原地静止"预测轨迹，避免邻居卡死。但是这个方法之前尝试过，但是未解决。好像是因为判定到达终点附近时就立停止发布指令，无人机因为惯性漂移出终点范围再开始求解发布指令如此往复循环。当时未加速度跟踪，所以到达终点的时候有一定的速度。
-
 背景：我的主要开发环境是 Ubuntu 20.04、ROS Noetic、PX4以及gazebo，现在要研究一个无人机编队导航算法：用kinodynamicA*进行全局轨迹规划，然后mpc再进行局部规划和编队跟踪。局部规划考虑动态和静态避障，采用分布式规划；全局规划采用集中式（考虑到分布式规划会出现路径交叉的问题）；全局规划的作用是提供全局路径引导避免局部最优以及为mpc提供较好的优化初始值，全局+局部跑通之后再加入rl动态调节mpc代价函数的权重矩阵以及预测时域，整个算法仿真做好后再进行实机实验，然后写一篇论文。因为之前复现过一篇利用lmpc（mpc的基础上增加利用反步法求解出的辅助控制器约束保证系统李雅普诺夫稳定性）进行编队追踪包围的论文，所以现在沿用之前的算法，也使用lmpc并采用casadi的ipopt求解器求解最优（若没有更适合的求解器）。但是原论文直接将障碍物的中心位置给出并仅考虑与中心位置的距离，而我的算法框架加入了感知模块，要处理障碍物点云。一开始处理为esdf地图，然后利用三线插值的方法使其代价函数的障碍物距离惩罚项可以被求导从而进行求解，但是发现出现了两个致命问题：求解器与插值器难以兼容且计算量巨大。所以打算参考～/catkin_ws/src/form_nav/Mapless Collision-Free Flight via MPC using Dual KD-Trees in Cluttered.pdf所示的论文提出的方法，利用当前状态->建立 obatacle KD-tree->根据当前参考点查询最近障碍点->构造 MPC
-cost->IPOPT 优化这种方式来处理障碍物距离惩罚。参考的论文算法代码路径为/home/raner/catkin_ws/src/Avoid-MPC/roswrapper/ros/src/avoid_mpc。按“1.单无人机mpc仅跟踪全局路径->2.编队跟踪->3.加入kdtree，mpc加入静态避障->4.加入动态避障->5.加入稳定性约束->6.加入主动提供较好mpc优化初始值"的步骤逐步完善算法编写，每一步先能跑通再进行下一步算法的编写。目前完成第一、第二步，下面请给出第三步的修改方案。
+cost->IPOPT 优化这种方式来处理障碍物距离惩罚。参考的论文算法代码路径为/home/raner/catkin_ws/src/Avoid-MPC/roswrapper/ros/src/avoid_mpc。按“1.单无人机mpc仅跟踪全局路径->2.编队跟踪->3.加入kdtree，mpc加入静态避障->4.加入动态避障->5.加入稳定性约束->6.加入主动提供较好mpc优化初始值"的步骤逐步完善算法编写。
 
-背景：我的主要开发环境是 Ubuntu 20.04、ROS Noetic、PX4以及gazebo，现在要研究一个无人机编队导航算法：用kinodynamicA*进行全局轨迹规划，然后mpc再进行局部规划和编队跟踪。局部规划考虑动态和静态避障，采用分布式规划；全局规划采用集中式（考虑到分布式规划会出现路径交叉的问题）；全局规划的作用是提供全局路径引导避免局部最优以及为mpc提供较好的优化初始值，全局+局部跑通之后再加入rl动态调节mpc代价函数的权重矩阵以及预测时域，整个算法仿真做好后再进行实机实验，然后写一篇论文。按“1.单无人机mpc仅跟踪全局路径->2.编队跟踪->3.加入kdtree，mpc加入静态避障->4.加入动态避障->5.加入稳定性约束->6.加入主动提供较好mpc优化初始值"的步骤逐步完善算法编写，每一步先能跑通再进行下一步算法的编写。目前完成第一、第二步。
+cd /home/raner/catkin_ws/src/form_nav/bag
+rosbag record --lz4 \
+  /uav0/mavros/local_position/pose \
+  /uav0/mavros/local_position/velocity_local \
+  /uav0/mavros/local_position/odom_world \
+  /uav0/mavros/setpoint_velocity/cmd_vel \
+  /uav0/mavros/setpoint_position/local \
+  /uav0/global_trajectory \
+  /uav0/predicted_path_share \
+  /uav0/traveled_path \
+  /uav0/mpc_sub_goal_marker \
+  /uav0/mpc_predicted_path_marker \
+  /uav0/mpc_queried_obstacles \
+  /move_base_simple/goal \
+  /uav0/obstacle_cloud \
+  /map_generator/global_cloud \
+  /tf /tf_static
+
+cd /home/raner/catkin_ws/src/form_nav/bag
+rosbag record --lz4 -e "/uav[0-5]+/(mavros/local_position/(pose|velocity_local|odom_world)|mavros/setpoint_velocity/cmd_vel|mavros/setpoint_position/local|global_trajectory|predicted_path_share|traveled_path|mpc_sub_goal_marker|mpc_predicted_path_marker|mpc_queried_obstacles|obstacle_cloud)"

@@ -161,7 +161,7 @@ Visualization Manager:
           Value: false
       Enabled: false
       Name: kinoA*
-    - Alpha: 1
+    - Alpha: 0.5
       Buffer Length: 1
       Class: rviz/Path
       Color: 136; 138; 133
@@ -170,7 +170,7 @@ Visualization Manager:
       Head Length: 0.20000000298023224
       Length: 0.30000001192092896
       Line Style: Billboards
-      Line Width: 0.05999999865889549
+      Line Width: 0.03999999910593033
       Name: Astar_path
       Offset:
         X: 0
@@ -718,7 +718,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 31.174571990966797
+      Distance: 43.80897521972656
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -726,9 +726,9 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 9.442750930786133
-        Y: 7.197279930114746
-        Z: -6.701364517211914
+        X: 8.345013618469238
+        Y: 7.506043910980225
+        Z: -6.628927230834961
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
