@@ -82,7 +82,7 @@ Visualization Manager:
       Marker Topic: /uav0/mpc_sub_goal_marker
       Name: subgoal
       Namespaces:
-        mpc_sub_goal: true
+        {}
       Queue Size: 100
       Value: true
     - Alpha: 1
@@ -187,21 +187,13 @@ Visualization Manager:
       Value: true
     - Class: rviz/Group
       Displays:
-        - Alpha: 1
-          Axes Length: 0.30000001192092896
-          Axes Radius: 0.07999999821186066
-          Class: rviz/Pose
-          Color: 255; 25; 0
+        - Class: rviz/Marker
           Enabled: true
-          Head Length: 0.30000001192092896
-          Head Radius: 0.10000000149011612
-          Name: UAV0_Pose
-          Queue Size: 10
-          Shaft Length: 1
-          Shaft Radius: 0.05000000074505806
-          Shape: Axes
-          Topic: /uav0/mavros/local_position/pose
-          Unreliable: false
+          Marker Topic: /uav0_odom_viz/robot
+          Name: UAV0_Model
+          Namespaces:
+            mesh: true
+          Queue Size: 100
           Value: true
         - Alpha: 1
           Buffer Length: 1
@@ -262,8 +254,7 @@ Visualization Manager:
               Marker Topic: /uav0/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                mpc_predict_points: true
-                mpc_predicted_path: true
+                {}
               Queue Size: 100
               Value: true
           Enabled: true
@@ -726,9 +717,9 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 8.345013618469238
-        Y: 7.506043910980225
-        Z: -6.628927230834961
+        X: -12.71202278137207
+        Y: 0.8132416009902954
+        Z: -8.473180770874023
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false

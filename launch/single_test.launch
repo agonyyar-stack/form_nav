@@ -1,6 +1,6 @@
 <launch>
     <!-- random=随机障碍物, fixed=固定复杂场景 -->
-    <arg name="scene" default="random" />
+    <arg name="scene" default="fixed" />
     <!-- 全局层算法选择: kino_astar=kinodynamic A*, astar=纯 A* -->
     <arg name="global_planner" default="astar" />
 
@@ -60,6 +60,14 @@
     <!-- 切换模式，解锁 -->
     <include file="$(find form_nav)/launch/uav_base.launch" >
         <param name="uav_id" value="uav0" />
+    </include>
+
+    <!-- 里程计可视化（无人机模型 Marker） -->
+    <include file="$(find form_nav)/launch/odom_visualization.launch">
+        <arg name="uav_id" value="uav0" />
+        <arg name="color_r" value="1.0" />
+        <arg name="color_g" value="0.2" />
+        <arg name="color_b" value="0.2" />
     </include>
 
     <!-- 全局规划器（kinoA*） -->

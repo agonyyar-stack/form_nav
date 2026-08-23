@@ -103,21 +103,13 @@ Visualization Manager:
       Value: true
     - Class: rviz/Group
       Displays:
-        - Alpha: 1
-          Axes Length: 0.30000001192092896
-          Axes Radius: 0.07999999821186066
-          Class: rviz/Pose
-          Color: 255; 25; 0
+        - Class: rviz/Marker
           Enabled: true
-          Head Length: 0.30000001192092896
-          Head Radius: 0.10000000149011612
-          Name: UAV0_Pose
-          Queue Size: 10
-          Shaft Length: 1
-          Shaft Radius: 0.05000000074505806
-          Shape: Axes
-          Topic: /uav0/mavros/local_position/pose
-          Unreliable: false
+          Marker Topic: /uav0_odom_viz/robot
+          Name: UAV0_Model
+          Namespaces:
+            mesh: true
+          Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true
@@ -251,21 +243,13 @@ Visualization Manager:
       Name: UAV0
     - Class: rviz/Group
       Displays:
-        - Alpha: 1
-          Axes Length: 0.30000001192092896
-          Axes Radius: 0.07999999821186066
-          Class: rviz/Pose
-          Color: 255; 25; 0
+        - Class: rviz/Marker
           Enabled: true
-          Head Length: 0.30000001192092896
-          Head Radius: 0.10000000149011612
-          Name: Pose
-          Queue Size: 10
-          Shaft Length: 1
-          Shaft Radius: 0.05000000074505806
-          Shape: Axes
-          Topic: /uav1/mavros/local_position/pose
-          Unreliable: false
+          Marker Topic: /uav1_odom_viz/robot
+          Name: UAV1_Model
+          Namespaces:
+            mesh: true
+          Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true
@@ -399,21 +383,13 @@ Visualization Manager:
       Name: UAV1
     - Class: rviz/Group
       Displays:
-        - Alpha: 1
-          Axes Length: 0.30000001192092896
-          Axes Radius: 0.07999999821186066
-          Class: rviz/Pose
-          Color: 255; 25; 0
+        - Class: rviz/Marker
           Enabled: true
-          Head Length: 0.30000001192092896
-          Head Radius: 0.10000000149011612
-          Name: Pose
-          Queue Size: 10
-          Shaft Length: 1
-          Shaft Radius: 0.05000000074505806
-          Shape: Axes
-          Topic: /uav2/mavros/local_position/pose
-          Unreliable: false
+          Marker Topic: /uav2_odom_viz/robot
+          Name: UAV2_Model
+          Namespaces:
+            mesh: true
+          Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true
@@ -548,21 +524,13 @@ Visualization Manager:
       Name: UAV2
     - Class: rviz/Group
       Displays:
-        - Alpha: 1
-          Axes Length: 0.30000001192092896
-          Axes Radius: 0.07999999821186066
-          Class: rviz/Pose
-          Color: 255; 25; 0
+        - Class: rviz/Marker
           Enabled: true
-          Head Length: 0.30000001192092896
-          Head Radius: 0.10000000149011612
-          Name: Pose
-          Queue Size: 10
-          Shaft Length: 1
-          Shaft Radius: 0.05000000074505806
-          Shape: Axes
-          Topic: /uav3/mavros/local_position/pose
-          Unreliable: false
+          Marker Topic: /uav3_odom_viz/robot
+          Name: UAV3_Model
+          Namespaces:
+            mesh: true
+          Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true
@@ -696,21 +664,13 @@ Visualization Manager:
       Name: UAV3
     - Class: rviz/Group
       Displays:
-        - Alpha: 1
-          Axes Length: 0.30000001192092896
-          Axes Radius: 0.07999999821186066
-          Class: rviz/Pose
-          Color: 255; 25; 0
+        - Class: rviz/Marker
           Enabled: true
-          Head Length: 0.30000001192092896
-          Head Radius: 0.10000000149011612
-          Name: Pose
-          Queue Size: 10
-          Shaft Length: 1
-          Shaft Radius: 0.05000000074505806
-          Shape: Axes
-          Topic: /uav4/mavros/local_position/pose
-          Unreliable: false
+          Marker Topic: /uav4_odom_viz/robot
+          Name: UAV4_Model
+          Namespaces:
+            mesh: true
+          Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true
@@ -845,21 +805,13 @@ Visualization Manager:
       Name: UAV4
     - Class: rviz/Group
       Displays:
-        - Alpha: 1
-          Axes Length: 0.30000001192092896
-          Axes Radius: 0.07999999821186066
-          Class: rviz/Pose
-          Color: 255; 25; 0
+        - Class: rviz/Marker
           Enabled: true
-          Head Length: 0.30000001192092896
-          Head Radius: 0.10000000149011612
-          Name: Pose
-          Queue Size: 10
-          Shaft Length: 1
-          Shaft Radius: 0.05000000074505806
-          Shape: Axes
-          Topic: /uav5/mavros/local_position/pose
-          Unreliable: false
+          Marker Topic: /uav5_odom_viz/robot
+          Name: UAV5_Model
+          Namespaces:
+            mesh: true
+          Queue Size: 100
           Value: true
         - Class: rviz/Marker
           Enabled: true

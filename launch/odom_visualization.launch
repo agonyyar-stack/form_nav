@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 每架无人机启动一个里程计可视化节点，把 pose 显示为无人机模型 -->
+  <arg name="uav_id" default="uav0"/>
+  <arg name="robot_scale" default="0.5"/>
+  <arg name="color_r" default="1.0"/>
+  <arg name="color_g" default="0.0"/>
+  <arg name="color_b" default="0.0"/>
+
+  <node pkg="form_nav" type="odom_visualization" name="$(arg uav_id)_odom_viz" output="screen">
+    <remap from="~pose_in" to="/$(arg uav_id)/mavros/local_position/pose"/>
+    <param name="robot_scale" value="$(arg robot_scale)"/>
+    <param name="color/r" value="$(arg color_r)"/>
+    <param name="color/g" value="$(arg color_g)"/>
+    <param name="color/b" value="$(arg color_b)"/>
+  </node>
+</launch>

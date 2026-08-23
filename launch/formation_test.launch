@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="rviz" default="true" />
-  <arg name="scene" default="random" /> <!-- random=随机障碍物, fixed=固定复杂场景 -->
+  <arg name="scene" default="fixed" /> <!-- random=随机障碍物, fixed=固定复杂场景 -->
   <arg name="world_frame" default="world" />
   <arg name="formation_config_file"
        default="$(find form_nav)/config/formations.yaml" />
@@ -81,6 +81,44 @@
   </include>
   <include file="$(find form_nav)/launch/uav_base.launch">
     <arg name="uav_id" value="uav5" />
+  </include>
+
+  <!-- ========== 里程计可视化（无人机模型 Marker） ========== -->
+  <include file="$(find form_nav)/launch/odom_visualization.launch">
+    <arg name="uav_id" value="uav0" />
+    <arg name="color_r" value="1.0" />
+    <arg name="color_g" value="0.2" />
+    <arg name="color_b" value="0.2" />
+  </include>
+  <include file="$(find form_nav)/launch/odom_visualization.launch">
+    <arg name="uav_id" value="uav1" />
+    <arg name="color_r" value="0.2" />
+    <arg name="color_g" value="0.5" />
+    <arg name="color_b" value="1.0" />
+  </include>
+  <include file="$(find form_nav)/launch/odom_visualization.launch">
+    <arg name="uav_id" value="uav2" />
+    <arg name="color_r" value="0.8" />
+    <arg name="color_g" value="0.6" />
+    <arg name="color_b" value="0.0" />
+  </include>
+  <include file="$(find form_nav)/launch/odom_visualization.launch">
+    <arg name="uav_id" value="uav3" />
+    <arg name="color_r" value="0.9" />
+    <arg name="color_g" value="0.4" />
+    <arg name="color_b" value="0.0" />
+  </include>
+  <include file="$(find form_nav)/launch/odom_visualization.launch">
+    <arg name="uav_id" value="uav4" />
+    <arg name="color_r" value="0.4" />
+    <arg name="color_g" value="0.2" />
+    <arg name="color_b" value="0.6" />
+  </include>
+  <include file="$(find form_nav)/launch/odom_visualization.launch">
+    <arg name="uav_id" value="uav5" />
+    <arg name="color_r" value="0.6" />
+    <arg name="color_g" value="0.4" />
+    <arg name="color_b" value="0.1" />
   </include>
 
   <!-- ========== 全局规划器（kinoA*） ========== -->

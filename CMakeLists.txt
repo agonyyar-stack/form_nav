@@ -108,3 +108,7 @@ target_link_libraries(kino_astar_path_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} 
 add_executable(mpc_node src/mpc_node.cpp src/mpc.cpp src/formation_config.cpp src/kd_tree_map.cpp)
 target_link_libraries(mpc_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${EIGEN3_LIBRARIES} casadi)
 add_dependencies(mpc_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+# 里程计可视化节点：发布 MESH_RESOURCE Marker 显示无人机模型
+add_executable(odom_visualization src/odom_visualization.cpp)
+target_link_libraries(odom_visualization ${catkin_LIBRARIES})
