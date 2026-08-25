@@ -80,8 +80,9 @@ private: //存储了 MPC 算法运行时的配置和状态
     int replan_max_iter_;      // 最近点重查询重规划的最大迭代次数
 
     //碰撞参数
-    double d_safe_ca; // 编队内安全距离 COLLISION AVOIDANCE
-    double Wc;        // 相互碰撞权重
+    double d_safe_ca; // 编队内硬安全距离（中心距口径，逼近时惩罚发散）
+    double d_act_ca;  // 编队避碰激活范围 D̄（中心距口径，超过则惩罚为 0）
+    double Wc;        // 相互碰撞权重（对数势垒）
 
     MX X; //状态变量
     MX U; //控制变量
@@ -107,6 +108,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     int built_nearest_obs_num_;
     double built_detect_range_;
     double built_safe_dist_;
+    double built_d_safe_ca_;
+    double built_d_act_ca_;
     int built_ipopt_max_iter_;
     int ipopt_max_iter_;  // IPOPT 最大迭代次数（可调，避障势垒陡峭时可加大）
     double built_ipopt_tol_;
@@ -157,8 +160,10 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setBrakeAcceleration(double a) { a_brake_ = a > 0.0 ? a : 0.8 * u_max_; }
     /// 设置 KD-tree 对数势垒避障权重
     void setObstacleWeight(double w) { Wo = w; }
-    /// 设置编队内安全距离 (m)
+    /// 设置编队内硬安全距离 (m，中心距口径)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
+    /// 设置编队避碰激活范围 (m，中心距口径，须大于 d_safe_ca)
+    void setCollisionActivationRange(double d) { d_act_ca = d; }
     /// 设置相互碰撞惩罚权重
     void setCollisionWeight(double w) { Wc = w; }
     /// 设置控制输入惩罚权重 (对角矩阵，原 F_)

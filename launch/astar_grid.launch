@@ -25,7 +25,7 @@
     <param name="world_frame" value="$(arg world_frame)" />
     <param name="my_id" value="$(arg my_id)" />
     <param name="formation_config_namespace" value="$(arg formation_config_namespace)" />
-    <param name="grid_map/resolution" value="0.2" /> <!-- 栅格地图分辨率，单位 m/格 -->
+    <param name="grid_map/resolution" value="0.1" /> <!-- 栅格地图分辨率，单位 m/格 -->
     <param name="grid_map/map_size_x" value="50.0" /> <!-- 地图 X 方向尺寸，单位 m -->
     <param name="grid_map/map_size_y" value="50.0" /> <!-- 地图 Y 方向尺寸，单位 m -->
     <param name="grid_map/map_size_z" value="3.0" /> <!-- 地图 Z 方向尺寸，单位 m -->

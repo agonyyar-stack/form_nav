@@ -9,7 +9,7 @@
   <arg name="neighbor_trajectory_timeout" default="0.3" />
   <arg name="neighbor_future_tolerance" default="0.05" />
   <!-- 全局层算法选择: kino_astar=kinodynamic A*, astar=纯 A* -->
-  <arg name="global_planner" default="kino_astar" />
+  <arg name="global_planner" default="astar" />
 
   <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">
   </include>

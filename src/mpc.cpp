@@ -50,11 +50,14 @@ Mpc::Mpc() {
     built_nearest_obs_num_ = -1;
     built_detect_range_ = -1.0;
     built_safe_dist_ = -1.0;
+    built_d_safe_ca_ = -1.0;
+    built_d_act_ca_ = -1.0;
     built_ipopt_max_iter_ = -1;
     built_ipopt_tol_ = -1.0;
-    //碰撞参数
-    d_safe_ca = 0.3; //编队内安全距离
-    Wc = 1000; //相互碰撞权重
+    //碰撞参数（中心距口径，不扣半径）
+    d_safe_ca = 0.75; //编队内硬安全距离
+    d_act_ca = 1.6;   //编队避碰激活范围（小于编队标称间距 2.0）
+    Wc = 200;         //相互碰撞权重（对数势垒）
     //反步法控制器增益参数
     k1 = DM::diag(DM({7, 7, 7, 6}));
     k2 = DM::diag(DM({2, 2, 2, 2}));
@@ -466,10 +469,13 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
         MX y_j = j_param(Slice(0, 4), k_step);
         MX pos_j = y_j(Slice(0, 3));
 
-        MX diff = pos_i - pos_j;
-        MX dist = MX::norm_2(diff);
-
-        MX h_ca = Wc *(1.0 / (1.0 + exp(dist - d_safe_ca)));
+        // 对数势垒（中心距口径）：
+        //   d >= d_act_ca 时惩罚严格为 0；d -> d_safe_ca+ 时惩罚 -> +∞。
+        // 钳位 d >= d_safe_ca + eps 避免 log 参数非正，与障碍物项处理一致。
+        MX dist = MX::norm_2(pos_i - pos_j);
+        MX d_c = MX::fmax(dist, d_safe_ca + 1e-2);
+        MX h_ca = Wc * MX::fmax(
+            0.0, -log((d_c - d_safe_ca) / (d_act_ca - d_safe_ca)));
         H_ca += h_ca;
     }
 
@@ -489,6 +495,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         built_nearest_obs_num_ == nearest_obs_num_ &&
         std::abs(built_detect_range_ - detect_range_) < 1e-9 &&
         std::abs(built_safe_dist_ - safe_dist_) < 1e-9 &&
+        std::abs(built_d_safe_ca_ - d_safe_ca) < 1e-9 &&
+        std::abs(built_d_act_ca_ - d_act_ca) < 1e-9 &&
         built_ipopt_max_iter_ == ipopt_max_iter_ &&
         std::abs(built_ipopt_tol_ - ipopt_tol_) < 1e-12) {
         return true;
@@ -531,10 +539,11 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
 
         if (k < N_) {
             // 子目标惩罚只加在终端步，中间步仅编队项独立加权，互不耦合
+            // cost += MX::mtimes({subgoal_err.T(), Q_, subgoal_err});
             cost += MX::mtimes({S_f.T(), Q_f_, S_f});
             
             MX U_k = U(all, k);
-            cost += MX::mtimes({U_k.T(), F_, U_k}); // 控制输入惩罚,已停用
+            cost += MX::mtimes({U_k.T(), F_, U_k}); // 控制输入惩罚
         } else {
             cost += MX::mtimes({subgoal_err.T(), Q_, subgoal_err});
             cost += MX::mtimes({S_f.T(), Q_f_, S_f});
@@ -602,6 +611,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     built_nearest_obs_num_ = nearest_obs_num_;
     built_detect_range_ = detect_range_;
     built_safe_dist_ = safe_dist_;
+    built_d_safe_ca_ = d_safe_ca;
+    built_d_act_ca_ = d_act_ca;
     built_ipopt_max_iter_ = ipopt_max_iter_;
     built_ipopt_tol_ = ipopt_tol_;
     has_last_solution_ = false;

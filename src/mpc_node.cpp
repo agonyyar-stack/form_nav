@@ -744,8 +744,9 @@ int main(int argc, char **argv) {
     double dt    = nh_private.param<double>("mpc/dt", 0.05);
     double u_max = nh_private.param<double>("mpc/u_max", 6.0);
     double w_max = nh_private.param<double>("mpc/w_max", 2.0);
-    double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.3);
-    double w_ca      = nh_private.param<double>("mpc/w_ca", 1000.0);
+    double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.75);
+    double d_act_ca  = nh_private.param<double>("mpc/d_act_ca", 1.6);
+    double w_ca      = nh_private.param<double>("mpc/w_ca", 200.0);
     double w_form    = nh_private.param<double>("mpc/w_form", 2000.0);
     double w_subgoal = nh_private.param<double>("mpc/w_subgoal", 20000.0);
     int nearest_obs_num = nh_private.param<int>("mpc/nearest_obs_num", 3);
@@ -784,6 +785,13 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(w_u) || w_u < 0.0) {
         throw std::runtime_error("mpc/w_u must be non-negative");
+    }
+    if (!std::isfinite(d_safe_ca) || d_safe_ca < 0.0) {
+        throw std::runtime_error("mpc/d_safe_ca must be non-negative");
+    }
+    if (!std::isfinite(d_act_ca) || d_act_ca <= d_safe_ca) {
+        throw std::runtime_error(
+            "mpc/d_act_ca must be finite and greater than mpc/d_safe_ca");
     }
     if (!std::isfinite(w_ca) || w_ca < 0.0) {
         throw std::runtime_error("mpc/w_ca must be non-negative");
@@ -877,6 +885,7 @@ int main(int argc, char **argv) {
     mpc_ptr->setIpoptMaxIter(ipopt_max_iter);
     mpc_ptr->setIpoptTol(ipopt_tol);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
+    mpc_ptr->setCollisionActivationRange(d_act_ca);
     mpc_ptr->setCollisionWeight(w_ca);
     mpc_ptr->setLookaheadDistance(lookahead_distance);
     mpc_ptr->setBrakeAcceleration(brake_accel);
@@ -894,7 +903,7 @@ int main(int argc, char **argv) {
         DM::diag(DM{w_subgoal, w_subgoal, w_subgoal / 2.0, w_subgoal / 200.0}));
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
-             "d_safe_ca=%.2f, w_ca=%.2f, "
+             "d_safe_ca=%.2f, d_act_ca=%.2f, w_ca=%.2f, "
              "w_form=%.2f, w_subgoal=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
              "safe_dist=%.2f, detect_range=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
@@ -902,7 +911,7 @@ int main(int argc, char **argv) {
              "lookahead=%.2f, a_brake=%.2f, "
              "arrival_dist=%.2f, arrival_vel=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_ca, w_ca, w_form, w_subgoal,
+             d_safe_ca, d_act_ca, w_ca, w_form, w_subgoal,
              nearest_obs_num, drone_radius, w_oa,
              safe_dist, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
