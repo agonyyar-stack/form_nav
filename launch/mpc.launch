@@ -50,7 +50,7 @@
         <param name="mpc/w_du" value="1000.0" />             <!-- 控制增量惩罚（抑制指令抖动） -->
 
         <param name="mpc/a_brake" value="0.0" />            <!-- 制动加速度 (m/s^2)，0 表示自动取 0.8*u_max -->
-        <param name="mpc/arrival_distance" value="0.2" />   <!-- 到达锁定：到终点直线距离阈值 (m) -->
+        <param name="mpc/arrival_distance" value="0.1" />   <!-- 到达锁定：到终点直线距离阈值 (m) -->
         <param name="mpc/arrival_velocity" value="0.1" />   <!-- 到达锁定：3D 速度阈值 (m/s) -->
 
         <param name="communication/neighbor_trajectory_timeout"

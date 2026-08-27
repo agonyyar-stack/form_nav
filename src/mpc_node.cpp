@@ -13,6 +13,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2/LinearMath/Vector3.h>
 #include <tf2_ros/transform_listener.h>
 #include <Eigen/Dense>
 #include <algorithm>
@@ -215,16 +216,21 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
         current_mpc_state(2) = world_pose.pose.position.z;
         current_mpc_state(3) = tf2::getYaw(world_pose.pose.orientation);
 
-        // 2) 线速度：MAVROS/FAST-LIO 均发布于 header 系下，按 header.frame_id 变换
-        geometry_msgs::Vector3Stamped linear_source;
-        linear_source.header = msg->header;
-        linear_source.header.frame_id = source_frame;
-        linear_source.vector = msg->twist.twist.linear;
-        const auto linear_world = tf_buffer_ptr->transform(
-            linear_source, WORLD_FRAME, ros::Duration(0.05));
-        vel_world_x = linear_world.vector.x;
-        vel_world_y = linear_world.vector.y;
-        vel_world_z = linear_world.vector.z;
+        // 2) 线速度：MAVROS odom 的 twist.linear 定义在机体系
+        //    （child_frame/base_link，遵循 nav_msgs/Odometry 约定），
+        //    需用位姿四元数旋转到世界系（与 odom_to_world 的已验证逻辑一致）。
+        //    注意：若实机接入 FAST-LIO，其 odom 的 twist.linear 已是
+        //    camera_init（世界系），接入时需去掉这里的旋转，避免双重旋转。
+        tf2::Quaternion world_orientation;
+        tf2::fromMsg(world_pose.pose.orientation, world_orientation);
+        const tf2::Vector3 linear_world = tf2::quatRotate(
+            world_orientation,
+            tf2::Vector3(msg->twist.twist.linear.x,
+                         msg->twist.twist.linear.y,
+                         msg->twist.twist.linear.z));
+        vel_world_x = linear_world.x();
+        vel_world_y = linear_world.y();
+        vel_world_z = linear_world.z();
 
         // 3) 角速度：机体系 z 分量即偏航角速率（ENU 约定），无需 TF
         vel_body_w = msg->twist.twist.angular.z;
