@@ -6,6 +6,7 @@
 #include <geometry_msgs/TwistStamped.h>
 #include <geometry_msgs/Vector3Stamped.h>
 #include <std_msgs/Float64MultiArray.h>
+#include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <visualization_msgs/Marker.h>
 #include <sensor_msgs/PointCloud2.h>
@@ -58,9 +59,7 @@ ros::Publisher sub_goal_pub;           // 滚动子目标可视化
 Eigen::VectorXd current_mpc_state = Eigen::VectorXd::Zero(8);
 
 // 控制循环只有在这些数据全部到齐后才允许调用 MPC。
-bool has_pose = false;
-bool has_velocity = false;
-bool has_yaw = false;
+bool has_odom = false;
 
 double vel_world_x = 0, vel_world_y = 0, vel_world_z = 0;
 double vel_body_w = 0;
@@ -195,47 +194,44 @@ void globalTrajCallback(const form_nav::GlobalTrajectory::ConstPtr& msg) {
              UAV_NAME.c_str(), current_trajectory_id, global_traj.size());
 }
 
-// ========== MAVROS 回调 ==========
-void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
-    try {
-        geometry_msgs::PoseStamped source = *msg;
-        if (source.header.frame_id.empty()) source.header.frame_id = LOCAL_FRAME;
-        const auto world_pose = tf_buffer_ptr->transform(
-            source, WORLD_FRAME, ros::Duration(0.05));
-        current_mpc_state(0) = world_pose.pose.position.x;
-        current_mpc_state(1) = world_pose.pose.position.y;
-        current_mpc_state(2) = world_pose.pose.position.z;
-        current_mpc_state(3) = tf2::getYaw(world_pose.pose.orientation);
-        has_pose = true;
-        has_yaw = true;
-    } catch (const tf2::TransformException& error) {
-        ROS_WARN_THROTTLE(2.0, "%s: pose transform to %s failed: %s",
-                          UAV_NAME.c_str(), WORLD_FRAME.c_str(), error.what());
-    }
-}
-
-void velocityCallbackWorld(const geometry_msgs::TwistStamped::ConstPtr& msg) {
+// ========== 里程计回调 ==========
+// 位姿与速度统一取自里程计（仿真: /mavros/local_position/odom；
+// 实机: FAST-LIO odom）。线速度在 odom 的 header 系下，角速度在机体系下。
+void odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
     try {
         const std::string source_frame = msg->header.frame_id.empty()
                                              ? LOCAL_FRAME
                                              : msg->header.frame_id;
+
+        // 1) 位姿：从 odom 的 header 系变换到 WORLD_FRAME
+        geometry_msgs::PoseStamped source_pose;
+        source_pose.header = msg->header;
+        source_pose.header.frame_id = source_frame;
+        source_pose.pose = msg->pose.pose;
+        const auto world_pose = tf_buffer_ptr->transform(
+            source_pose, WORLD_FRAME, ros::Duration(0.05));
+        current_mpc_state(0) = world_pose.pose.position.x;
+        current_mpc_state(1) = world_pose.pose.position.y;
+        current_mpc_state(2) = world_pose.pose.position.z;
+        current_mpc_state(3) = tf2::getYaw(world_pose.pose.orientation);
+
+        // 2) 线速度：MAVROS/FAST-LIO 均发布于 header 系下，按 header.frame_id 变换
         geometry_msgs::Vector3Stamped linear_source;
         linear_source.header = msg->header;
         linear_source.header.frame_id = source_frame;
-        linear_source.vector = msg->twist.linear;
-        geometry_msgs::Vector3Stamped angular_source = linear_source;
-        angular_source.vector = msg->twist.angular;
+        linear_source.vector = msg->twist.twist.linear;
         const auto linear_world = tf_buffer_ptr->transform(
             linear_source, WORLD_FRAME, ros::Duration(0.05));
-        const auto angular_world = tf_buffer_ptr->transform(
-            angular_source, WORLD_FRAME, ros::Duration(0.05));
         vel_world_x = linear_world.vector.x;
         vel_world_y = linear_world.vector.y;
         vel_world_z = linear_world.vector.z;
-        vel_body_w = angular_world.vector.z;
-        has_velocity = true;
+
+        // 3) 角速度：机体系 z 分量即偏航角速率（ENU 约定），无需 TF
+        vel_body_w = msg->twist.twist.angular.z;
+
+        has_odom = true;
     } catch (const tf2::TransformException& error) {
-        ROS_WARN_THROTTLE(2.0, "%s: velocity transform to %s failed: %s",
+        ROS_WARN_THROTTLE(2.0, "%s: odom transform to %s failed: %s",
                           UAV_NAME.c_str(), WORLD_FRAME.c_str(), error.what());
     }
 }
@@ -476,7 +472,7 @@ void controlLoop(const ros::TimerEvent&) {
     // 位置 setpoint，使 PX4 保持在地面不起飞，触发
     // "Disarmed by auto preflight disarming"（解锁后 2 秒内无起飞自动上锁）。
     // 因此起飞/悬停阶段完全交给 uav_base 的位置 setpoint 兜底。
-    if (!has_pose || !has_velocity || !has_yaw || !global_traj_received) {
+    if (!has_odom || !global_traj_received) {
         return;
     }
 
@@ -926,8 +922,9 @@ int main(int argc, char **argv) {
     // --- 订阅（飞控状态、位置、速度、邻居预测状态） --- 
     ros::Subscriber fc_state_sub = nh.subscribe<mavros_msgs::State>(
         "/" + UAV_NAME + "/mavros/state", 10, fcStateCallback);
-    ros::Subscriber pose_sub = nh.subscribe("/" + UAV_NAME + "/mavros/local_position/pose", 10, poseCallback);
-    ros::Subscriber vel_sub = nh.subscribe("/" + UAV_NAME + "/mavros/local_position/velocity_local", 10, velocityCallbackWorld);
+    // 位姿及位姿变化率统一来自里程计（仿真: mavros local_position/odom；实机: FAST-LIO odom）
+    ros::Subscriber odom_sub = nh.subscribe<nav_msgs::Odometry>(
+        "/" + UAV_NAME + "/mavros/local_position/odom", 10, odomCallback);
 
     // 全局轨迹订阅
     ros::Subscriber global_traj_sub = nh.subscribe<form_nav::GlobalTrajectory>(
