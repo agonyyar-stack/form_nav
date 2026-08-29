@@ -107,65 +107,65 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
 
     // --- 可视化路径 Marker ---
     // 灰色：原始 A* 栅格路径（去锯齿前后对照用）
-    {
-      visualization_msgs::Marker path_marker;
-      path_marker.header.frame_id = world_frame;
-      path_marker.header.stamp = ros::Time::now();
-      path_marker.ns = "astar/path";
-      path_marker.id = 0;
-      path_marker.type = visualization_msgs::Marker::LINE_STRIP;
-      path_marker.action = visualization_msgs::Marker::ADD;
-      path_marker.pose.orientation.w = 1.0;
-      path_marker.scale.x = 0.04;
-      path_marker.scale.y = 0.08;
-      path_marker.scale.z = 0.08;
-      path_marker.color.a = 0.6;
-      path_marker.color.r = 0.6;
-      path_marker.color.g = 0.6;
-      path_marker.color.b = 0.6;
+    // {
+    //   visualization_msgs::Marker path_marker;
+    //   path_marker.header.frame_id = world_frame;
+    //   path_marker.header.stamp = ros::Time::now();
+    //   path_marker.ns = "astar/path";
+    //   path_marker.id = 0;
+    //   path_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    //   path_marker.action = visualization_msgs::Marker::ADD;
+    //   path_marker.pose.orientation.w = 1.0;
+    //   path_marker.scale.x = 0.04;
+    //   path_marker.scale.y = 0.08;
+    //   path_marker.scale.z = 0.08;
+    //   path_marker.color.a = 0.6;
+    //   path_marker.color.r = 0.6;
+    //   path_marker.color.g = 0.6;
+    //   path_marker.color.b = 0.6;
 
-      for (size_t i = 0; i < raw_path.size(); i++)
-      {
-        geometry_msgs::Point pt;
-        pt.x = raw_path[i][0];
-        pt.y = raw_path[i][1];
-        pt.z = raw_path[i][2];
-        path_marker.points.push_back(pt);
-      }
-      path_marker_pub.publish(path_marker);
-    }
+    //   for (size_t i = 0; i < raw_path.size(); i++)
+    //   {
+    //     geometry_msgs::Point pt;
+    //     pt.x = raw_path[i][0];
+    //     pt.y = raw_path[i][1];
+    //     pt.z = raw_path[i][2];
+    //     path_marker.points.push_back(pt);
+    //   }
+    //   path_marker_pub.publish(path_marker);
+    // }
 
     // --- 可视化：去锯齿后的路径（橙色，仅开启时发布） ---
-    if (enable_shortcut)
-    {
-      visualization_msgs::Marker shortcut_marker;
-      shortcut_marker.header.frame_id = world_frame;
-      shortcut_marker.header.stamp = ros::Time::now();
-      shortcut_marker.ns = "astar/path_shortcut";
-      shortcut_marker.id = 0;
-      shortcut_marker.type = visualization_msgs::Marker::LINE_STRIP;
-      shortcut_marker.action = visualization_msgs::Marker::ADD;
-      shortcut_marker.pose.orientation.w = 1.0;
-      shortcut_marker.scale.x = 0.06;
-      shortcut_marker.scale.y = 0.08;
-      shortcut_marker.scale.z = 0.08;
-      shortcut_marker.color.a = 1.0;
-      shortcut_marker.color.r = 1.0;
-      shortcut_marker.color.g = 0.6;
-      shortcut_marker.color.b = 0.0;
+    // if (enable_shortcut)
+    // {
+    //   visualization_msgs::Marker shortcut_marker;
+    //   shortcut_marker.header.frame_id = world_frame;
+    //   shortcut_marker.header.stamp = ros::Time::now();
+    //   shortcut_marker.ns = "astar/path_shortcut";
+    //   shortcut_marker.id = 0;
+    //   shortcut_marker.type = visualization_msgs::Marker::LINE_STRIP;
+    //   shortcut_marker.action = visualization_msgs::Marker::ADD;
+    //   shortcut_marker.pose.orientation.w = 1.0;
+    //   shortcut_marker.scale.x = 0.04;
+    //   shortcut_marker.scale.y = 0.08;
+    //   shortcut_marker.scale.z = 0.08;
+    //   shortcut_marker.color.a = 1.0;
+    //   shortcut_marker.color.r = 0.7;
+    //   shortcut_marker.color.g = 0.7;
+    //   shortcut_marker.color.b = 0.7;
 
-      for (size_t i = 0; i < path.size(); i++)
-      {
-        geometry_msgs::Point pt;
-        pt.x = path[i][0];
-        pt.y = path[i][1];
-        pt.z = path[i][2];
-        shortcut_marker.points.push_back(pt);
-      }
-      path_marker_pub.publish(shortcut_marker);
-    }
+    //   for (size_t i = 0; i < path.size(); i++)
+    //   {
+    //     geometry_msgs::Point pt;
+    //     pt.x = path[i][0];
+    //     pt.y = path[i][1];
+    //     pt.z = path[i][2];
+    //     shortcut_marker.points.push_back(pt);
+    //   }
+    //   path_marker_pub.publish(shortcut_marker);
+    // }
 
-    // --- 发布 nav_msgs::Path 供 DWA 节点订阅（保留旧功能） ---
+    // --- 发布 nav_msgs::Path ---
     {
       nav_msgs::Path nav_path;
       nav_path.header.frame_id = world_frame;
@@ -242,7 +242,7 @@ int main(int argc, char** argv)
   goal_sub = nh.subscribe<geometry_msgs::PoseStamped>("/move_base_simple/goal", 10, &GoalCallback);
   odom_sub = nh.subscribe<nav_msgs::Odometry>("/astar/odom", 10, &OdomCallback);
 
-  path_marker_pub = nh.advertise<visualization_msgs::Marker>("/astar/path_marker", 10);
+  // path_marker_pub = nh.advertise<visualization_msgs::Marker>("/astar/path_marker", 10);
   global_path_pub_ = nh.advertise<nav_msgs::Path>("/astar/global_path", 10);
   // Latching guarantees that MPC nodes started later receive the active path.
   path_traj_pub = nh.advertise<form_nav::GlobalTrajectory>("/astar/trajectory", 1, true);

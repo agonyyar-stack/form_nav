@@ -64,6 +64,7 @@
     <remap from="/astar/odom" to="/$(arg uav_id)/mavros/local_position/odom_world"/>
     <!-- 分布式规划：轨迹统一输出到 /uavX/global_trajectory（与 kinoA* 全局层共用） -->
     <remap from="/astar/trajectory" to="/$(arg uav_id)/global_trajectory"/>
+    <remap from="/astar/global_path" to="/$(arg uav_id)/astar/global_path"/>
     <remap from="/astar/path_marker" to="/$(arg uav_id)/astar/path_marker"/>
     <remap from="/astar/goal_marker" to="/$(arg uav_id)/astar/goal_marker"/>
   </node>

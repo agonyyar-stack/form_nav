@@ -5,20 +5,14 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
-        - /UAV01
+        - /map frame1
         - /UAV01/global_path1
-        - /UAV01/global_path1/Astar1
         - /UAV11/glpbal_path1
-        - /UAV11/glpbal_path1/Astar1
         - /UAV21/glpbal_path1
-        - /UAV21/glpbal_path1/Astar1
         - /UAV21/MPC1/mpc_trajectory1
         - /UAV31/glpbal_path1
-        - /UAV31/glpbal_path1/Astar1
         - /UAV41/glpbal_path1
-        - /UAV41/glpbal_path1/Astar1
-        - /UAV51/glpbal_path1
-        - /UAV51/glpbal_path1/Astar1
+        - /UAV51/glpbal_path1/astar_path1
       Splitter Ratio: 0.5833333134651184
     Tree Height: 1492
   - Class: rviz/Selection
@@ -67,7 +61,7 @@ Visualization Manager:
     - Alpha: 0.5
       Class: rviz/Axes
       Enabled: true
-      Length: 5
+      Length: 10
       Name: map frame
       Radius: 0.10000000149011612
       Reference Frame: <Fixed Frame>
@@ -116,7 +110,7 @@ Visualization Manager:
           Marker Topic: /uav0/kino_astar/goal_marker
           Name: GoalPoint_uav0
           Namespaces:
-            kino_astar/goal: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -189,13 +183,29 @@ Visualization Manager:
                 {}
               Queue Size: 100
               Value: true
-            - Class: rviz/Marker
+            - Alpha: 1
+              Buffer Length: 1
+              Class: rviz/Path
+              Color: 186; 189; 182
               Enabled: true
-              Marker Topic: /uav0/astar/path_marker
-              Name: Astar
-              Namespaces:
-                {}
-              Queue Size: 100
+              Head Diameter: 0.30000001192092896
+              Head Length: 0.20000000298023224
+              Length: 0.30000001192092896
+              Line Style: Billboards
+              Line Width: 0.029999999329447746
+              Name: astar_path
+              Offset:
+                X: 0
+                Y: 0
+                Z: 0
+              Pose Color: 255; 85; 255
+              Pose Style: None
+              Queue Size: 10
+              Radius: 0.029999999329447746
+              Shaft Diameter: 0.10000000149011612
+              Shaft Length: 0.10000000149011612
+              Topic: /uav0/astar/global_path
+              Unreliable: false
               Value: true
           Enabled: true
           Name: global_path
@@ -234,7 +244,8 @@ Visualization Manager:
               Marker Topic: /uav0/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -256,7 +267,7 @@ Visualization Manager:
           Marker Topic: /uav1/kino_astar/goal_marker
           Name: GoalPoint_uav1
           Namespaces:
-            kino_astar/goal: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -326,16 +337,32 @@ Visualization Manager:
               Marker Topic: /uav1/kino_astar/path_marker
               Name: kinoAstar_path
               Namespaces:
-                kino_astar/path: true
-              Queue Size: 100
-              Value: true
-            - Class: rviz/Marker
-              Enabled: true
-              Marker Topic: /uav1/astar/path_marker
-              Name: Astar
-              Namespaces:
                 {}
               Queue Size: 100
+              Value: true
+            - Alpha: 1
+              Buffer Length: 1
+              Class: rviz/Path
+              Color: 186; 189; 182
+              Enabled: true
+              Head Diameter: 0.30000001192092896
+              Head Length: 0.20000000298023224
+              Length: 0.30000001192092896
+              Line Style: Billboards
+              Line Width: 0.029999999329447746
+              Name: astar_path
+              Offset:
+                X: 0
+                Y: 0
+                Z: 0
+              Pose Color: 255; 85; 255
+              Pose Style: None
+              Queue Size: 10
+              Radius: 0.029999999329447746
+              Shaft Diameter: 0.10000000149011612
+              Shaft Length: 0.10000000149011612
+              Topic: /uav1/astar/global_path
+              Unreliable: false
               Value: true
           Enabled: true
           Name: glpbal_path
@@ -374,7 +401,8 @@ Visualization Manager:
               Marker Topic: /uav1/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -396,7 +424,7 @@ Visualization Manager:
           Marker Topic: /uav2/kino_astar/goal_marker
           Name: GoalPoint_uav2
           Namespaces:
-            kino_astar/goal: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -466,16 +494,32 @@ Visualization Manager:
               Marker Topic: /uav2/kino_astar/path_marker
               Name: kinoAstar_path
               Namespaces:
-                kino_astar/path: true
-              Queue Size: 100
-              Value: true
-            - Class: rviz/Marker
-              Enabled: true
-              Marker Topic: /uav2/astar/path_marker
-              Name: Astar
-              Namespaces:
                 {}
               Queue Size: 100
+              Value: true
+            - Alpha: 1
+              Buffer Length: 1
+              Class: rviz/Path
+              Color: 186; 189; 182
+              Enabled: true
+              Head Diameter: 0.30000001192092896
+              Head Length: 0.20000000298023224
+              Length: 0.30000001192092896
+              Line Style: Billboards
+              Line Width: 0.029999999329447746
+              Name: astar_path
+              Offset:
+                X: 0
+                Y: 0
+                Z: 0
+              Pose Color: 255; 85; 255
+              Pose Style: None
+              Queue Size: 10
+              Radius: 0.029999999329447746
+              Shaft Diameter: 0.10000000149011612
+              Shaft Length: 0.10000000149011612
+              Topic: /uav2/astar/global_path
+              Unreliable: false
               Value: true
           Enabled: true
           Name: glpbal_path
@@ -537,7 +581,7 @@ Visualization Manager:
           Marker Topic: /uav3/kino_astar/goal_marker
           Name: GoalPoint_uav3
           Namespaces:
-            kino_astar/goal: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -610,13 +654,29 @@ Visualization Manager:
                 {}
               Queue Size: 100
               Value: true
-            - Class: rviz/Marker
+            - Alpha: 1
+              Buffer Length: 1
+              Class: rviz/Path
+              Color: 186; 189; 182
               Enabled: true
-              Marker Topic: /uav3/astar/path_marker
-              Name: Astar
-              Namespaces:
-                {}
-              Queue Size: 100
+              Head Diameter: 0.30000001192092896
+              Head Length: 0.20000000298023224
+              Length: 0.30000001192092896
+              Line Style: Billboards
+              Line Width: 0.029999999329447746
+              Name: astar_path
+              Offset:
+                X: 0
+                Y: 0
+                Z: 0
+              Pose Color: 255; 85; 255
+              Pose Style: None
+              Queue Size: 10
+              Radius: 0.029999999329447746
+              Shaft Diameter: 0.10000000149011612
+              Shaft Length: 0.10000000149011612
+              Topic: /uav3/astar/global_path
+              Unreliable: false
               Value: true
           Enabled: true
           Name: glpbal_path
@@ -655,7 +715,8 @@ Visualization Manager:
               Marker Topic: /uav3/mpc_predicted_path_marker
               Name: mpc_trajectory
               Namespaces:
-                {}
+                mpc_predict_points: true
+                mpc_predicted_path: true
               Queue Size: 100
               Value: true
           Enabled: true
@@ -677,7 +738,7 @@ Visualization Manager:
           Marker Topic: /uav4/kino_astar/goal_marker
           Name: GoalPoint_uav4
           Namespaces:
-            kino_astar/goal: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -747,16 +808,32 @@ Visualization Manager:
               Marker Topic: /uav4/kino_astar/path_marker
               Name: kinoAstar_path
               Namespaces:
-                kino_astar/path: true
-              Queue Size: 100
-              Value: true
-            - Class: rviz/Marker
-              Enabled: true
-              Marker Topic: /uav4/astar/path_marker
-              Name: Astar
-              Namespaces:
                 {}
               Queue Size: 100
+              Value: true
+            - Alpha: 1
+              Buffer Length: 1
+              Class: rviz/Path
+              Color: 186; 189; 182
+              Enabled: true
+              Head Diameter: 0.30000001192092896
+              Head Length: 0.20000000298023224
+              Length: 0.30000001192092896
+              Line Style: Billboards
+              Line Width: 0.029999999329447746
+              Name: astar_path
+              Offset:
+                X: 0
+                Y: 0
+                Z: 0
+              Pose Color: 255; 85; 255
+              Pose Style: None
+              Queue Size: 10
+              Radius: 0.029999999329447746
+              Shaft Diameter: 0.10000000149011612
+              Shaft Length: 0.10000000149011612
+              Topic: /uav4/astar/global_path
+              Unreliable: false
               Value: true
           Enabled: true
           Name: glpbal_path
@@ -818,7 +895,7 @@ Visualization Manager:
           Marker Topic: /uav5/kino_astar/goal_marker
           Name: GoalPoint_uav5
           Namespaces:
-            kino_astar/goal: true
+            {}
           Queue Size: 100
           Value: true
         - Alpha: 1
@@ -888,16 +965,32 @@ Visualization Manager:
               Marker Topic: /uav5/kino_astar/path_marker
               Name: kinoAstar_path
               Namespaces:
-                kino_astar/path: true
-              Queue Size: 100
-              Value: true
-            - Class: rviz/Marker
-              Enabled: true
-              Marker Topic: /uav5/astar/path_marker
-              Name: Astar
-              Namespaces:
                 {}
               Queue Size: 100
+              Value: true
+            - Alpha: 1
+              Buffer Length: 1
+              Class: rviz/Path
+              Color: 186; 189; 182
+              Enabled: true
+              Head Diameter: 0.30000001192092896
+              Head Length: 0.20000000298023224
+              Length: 0.30000001192092896
+              Line Style: Billboards
+              Line Width: 0.029999999329447746
+              Name: astar_path
+              Offset:
+                X: 0
+                Y: 0
+                Z: 0
+              Pose Color: 255; 85; 255
+              Pose Style: None
+              Queue Size: 10
+              Radius: 0.029999999329447746
+              Shaft Diameter: 0.10000000149011612
+              Shaft Length: 0.10000000149011612
+              Topic: /uav5/astar/global_path
+              Unreliable: false
               Value: true
           Enabled: true
           Name: glpbal_path
@@ -972,7 +1065,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 30.90029525756836
+      Distance: 63.008026123046875
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -980,17 +1073,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -13.714839935302734
-        Y: 4.106709957122803
-        Z: -7.715541362762451
+        X: -3.4505369663238525
+        Y: 0.41681790351867676
+        Z: -10.614381790161133
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.119796633720398
+      Pitch: 1.4897961616516113
       Target Frame: <Fixed Frame>
-      Yaw: 4.663567066192627
+      Yaw: 4.71856689453125
     Saved: ~
 Window Geometry:
   Displays:
