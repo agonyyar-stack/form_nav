@@ -126,8 +126,10 @@ private: //存储了 MPC 算法运行时的配置和状态
     // 全局轨迹
     std::vector<GlobalWaypoint> global_traj_;
     bool has_global_traj_;
-    // 最近一次投影的路径点索引（用于窗口搜索与进度单调保护）
+    // 最近一次投影的路径段索引（用于窗口搜索与进度单调保护）
     size_t last_progress_idx_ = 0;
+    // 最近一次投影的连续弧长（弧长单调保护，避免横向摆动时进度回退）
+    double last_progress_s_ = 0.0;
     // 滚动子目标：沿弧长前瞻选取，全局轨迹仅提供方向引导
     std::vector<double> path_arclength_;  // 与 global_traj_ 同步的累积弧长 (m)
     double lookahead_distance_;           // 子目标前瞻距离 (m)

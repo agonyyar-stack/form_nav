@@ -229,6 +229,44 @@ bool Astar::isSegmentCollisionFree(const Eigen::Vector3d& from, const Eigen::Vec
   return true;
 }
 
+// 贪心去锯齿（line-of-sight shortcut）：从路径起点开始，尽量用无碰撞直线段
+// 直接连接到更远的路径点；遇到第一个不可达点时，保留上一个可达点作为关键
+// 转弯点，再从该点继续。每个路径点至多被访问一次，复杂度 O(n)；安全判定
+// 复用 isSegmentCollisionFree（膨胀后占用栅格），与 search() 口径一致。
+void Astar::shortcutPath(std::vector<Eigen::Vector3d>& path)
+{
+  if (path.size() <= 2)
+  {
+    return;
+  }
+
+  std::vector<Eigen::Vector3d> shortcut;
+  shortcut.reserve(path.size());
+  shortcut.push_back(path.front());
+
+  size_t i = 0;
+  while (i + 1 < path.size())
+  {
+    // 从 i+2 开始尝试跨点直连，j 停在第一个不可达点（或路径末端之后）
+    size_t j = i + 2;
+    while (j < path.size() && isSegmentCollisionFree(path[i], path[j]))
+    {
+      ++j;
+    }
+    // 保留 j-1 作为本段终点；若与 i 相同（相邻点都不可达，正常不会发生），
+    // 退化为逐点保留，避免死循环
+    size_t keep = std::min(j - 1, path.size() - 1);
+    if (keep == i)
+    {
+      keep = i + 1;
+    }
+    shortcut.push_back(path[keep]);
+    i = keep;
+  }
+
+  path.swap(shortcut);
+}
+
 void Astar::setGridMap(GridMap::Ptr& grid_map)
 {
   this->grid_map_ = grid_map; //将外部传入的网格地图对象赋值给A*算法类的成员变量grid_map_，以便在A*算法中使用该网格地图进行路径搜索和碰撞检测

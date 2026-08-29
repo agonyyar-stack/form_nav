@@ -110,6 +110,7 @@ void Mpc::setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj) {
     last_u_.resize(0, 0);
     // 投影进度从头开始
     last_progress_idx_ = 0;
+    last_progress_s_ = 0.0;
 
     // 预计算累积弧长表，供滚动子目标沿弧长前推
     path_arclength_.resize(global_traj_.size());
@@ -127,8 +128,11 @@ void Mpc::setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj) {
               << path_arclength_.back() << "] m" << std::endl;
 }
 
-// 将物理位置投影到全局轨迹：在最近点索引附近窗口内搜索，返回最近路径点
-// 的累积弧长 s0。窗口命中边界时做一次全量搜索兜底；路径进度保持单调，
+// 将物理位置投影到全局轨迹折线：在最近路径段索引附近窗口内搜索，对每条
+// 线段计算最近点，返回连续弧长 s0（线段起点弧长 + 段内比例×段长）。
+// 注意：不能退回"最近离散路径点"的弧长——去锯齿后的稀疏路径点间距可达数
+// 米，离散投影会卡在最近路径点上不前进，导致子目标钉死、无人机原地悬停。
+// 窗口命中边界时做一次全量搜索兜底；路径进度保持单调（段索引 + 弧长），
 // 避免无人机在弯道或局部回头时跳回旧路径段。
 double Mpc::projectToPath(const Eigen::Vector3d& query_pos) {
     if (!has_global_traj_ || global_traj_.empty() ||
@@ -143,37 +147,69 @@ double Mpc::projectToPath(const Eigen::Vector3d& query_pos) {
     int lo = std::max(0, last - win_back);
     int hi = std::min(static_cast<int>(n) - 1, last + win_forward);
 
-    double min_dist = 1e9;
-    int closest = lo;
-    for (int i = lo; i <= hi; ++i) {
-        double dx = query_pos.x() - global_traj_[i].x;
-        double dy = query_pos.y() - global_traj_[i].y;
-        double dz = query_pos.z() - global_traj_[i].z;
-        double d2 = dx*dx + dy*dy + dz*dz;
+    auto projectSegment = [&](int i) {
+        const Eigen::Vector3d a(global_traj_[i].x, global_traj_[i].y,
+                                global_traj_[i].z);
+        const Eigen::Vector3d b(global_traj_[i + 1].x, global_traj_[i + 1].y,
+                                global_traj_[i + 1].z);
+        const Eigen::Vector3d d = b - a;
+        const double seg_len2 = d.squaredNorm();
+        double u = 0.0;
+        if (seg_len2 > 1e-12) {
+            u = (query_pos - a).dot(d) / seg_len2;
+            u = std::min(std::max(u, 0.0), 1.0);
+        }
+        const Eigen::Vector3d proj = a + u * d;
+        return std::make_pair((query_pos - proj).squaredNorm(), u);
+    };
+
+    double min_dist = 1e18;
+    int best_seg = -1;
+    double best_u = 0.0;
+    for (int i = lo; i < hi; ++i) {
+        auto [d2, u] = projectSegment(i);
         if (d2 < min_dist) {
             min_dist = d2;
-            closest = i;
+            best_seg = i;
+            best_u = u;
         }
     }
 
-    // 如果最近点落在窗口边界附近, 扩展一次全量搜索做安全重置
-    if (closest == hi || closest == lo) {
-        for (size_t i = 0; i < n; ++i) {
-            double dx = query_pos.x() - global_traj_[i].x;
-            double dy = query_pos.y() - global_traj_[i].y;
-            double dz = query_pos.z() - global_traj_[i].z;
-            double d2 = dx*dx + dy*dy + dz*dz;
+    // 如果最近线段落在窗口边界附近, 扩展一次全量搜索做安全重置
+    if (best_seg == lo || best_seg == hi - 1) {
+        for (int i = 0; i + 1 < static_cast<int>(n); ++i) {
+            auto [d2, u] = projectSegment(i);
             if (d2 < min_dist) {
                 min_dist = d2;
-                closest = static_cast<int>(i);
+                best_seg = i;
+                best_u = u;
             }
         }
     }
 
-    // 路径进度保持单调，避免跳回旧路径段
-    if (closest < last) closest = last;
-    last_progress_idx_ = static_cast<size_t>(closest);
-    return path_arclength_[closest];
+    if (best_seg < 0) {
+        // 单点路径或窗口异常：回到路径起点
+        return 0.0;
+    }
+
+    // 路径进度保持单调：段索引只前进不后退；若被钳制回 last 段，重新计算
+    // 该段上的投影参数，避免与弧长计算结果不一致
+    if (best_seg < last) {
+        best_seg = std::min(last, static_cast<int>(n) - 2);
+        auto [d2, u] = projectSegment(best_seg);
+        (void)d2;
+        best_u = u;
+    }
+
+    const double s0 = path_arclength_[best_seg] +
+                      best_u * (path_arclength_[best_seg + 1] -
+                                path_arclength_[best_seg]);
+    // 弧长单调保护：无人机横向摆动时连续投影弧长可能小幅回退，
+    // 钳制为不后退，避免子目标来回抖动
+    const double s_final = s0 < last_progress_s_ - 1e-4 ? last_progress_s_ : s0;
+    last_progress_idx_ = static_cast<size_t>(best_seg);
+    last_progress_s_ = s_final;
+    return s_final;
 }
 
 GlobalWaypoint Mpc::selectRollingGoal(double s0) {

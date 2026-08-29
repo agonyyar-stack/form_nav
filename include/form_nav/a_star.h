@@ -141,6 +141,9 @@ public:
   void init();
   void setGridMap(GridMap::Ptr& grid_map); //设置网格地图
   int search(Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, std::vector<Eigen::Vector3d>& path);
+  /// 贪心去锯齿（line-of-sight shortcut）：用无碰撞直线段替换路径中间点，
+  /// 消除栅格搜索产生的锯齿，保留首尾路径点。原位修改传入的 path。
+  void shortcutPath(std::vector<Eigen::Vector3d>& path);
   void reset();
 
   Astar() {};
