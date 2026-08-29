@@ -26,6 +26,7 @@ Eigen::Vector3d planning_uav_formation_offset = Eigen::Vector3d::Zero();
 std::unique_ptr<tf2_ros::Buffer> tf_buffer;
 std::unique_ptr<tf2_ros::TransformListener> tf_listener;
 uint32_t next_trajectory_id = 1;
+bool enable_shortcut = true;  // 是否启用 A* 路径贪心去锯齿（可参数覆盖）
 
 void OdomCallback(const nav_msgs::Odometry::ConstPtr& odom)
 {
@@ -94,7 +95,18 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
 
   if (success == 1)
   {
+    // 去锯齿（可选）：保留原始锯齿路径用于对照可视化，主输出统一使用
+    // 去锯齿后的路径（enable_shortcut=false 时保持原栅格路径）。
+    std::vector<Eigen::Vector3d> raw_path = path;
+    if (enable_shortcut)
+    {
+      const size_t n_raw = path.size();
+      astar_->shortcutPath(path);
+      ROS_INFO("A* path shortcut: %zu -> %zu waypoints", n_raw, path.size());
+    }
+
     // --- 可视化路径 Marker ---
+    // 灰色：原始 A* 栅格路径（去锯齿前后对照用）
     {
       visualization_msgs::Marker path_marker;
       path_marker.header.frame_id = world_frame;
@@ -112,15 +124,45 @@ void GoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
       path_marker.color.g = 0.6;
       path_marker.color.b = 0.6;
 
+      for (size_t i = 0; i < raw_path.size(); i++)
+      {
+        geometry_msgs::Point pt;
+        pt.x = raw_path[i][0];
+        pt.y = raw_path[i][1];
+        pt.z = raw_path[i][2];
+        path_marker.points.push_back(pt);
+      }
+      path_marker_pub.publish(path_marker);
+    }
+
+    // --- 可视化：去锯齿后的路径（橙色，仅开启时发布） ---
+    if (enable_shortcut)
+    {
+      visualization_msgs::Marker shortcut_marker;
+      shortcut_marker.header.frame_id = world_frame;
+      shortcut_marker.header.stamp = ros::Time::now();
+      shortcut_marker.ns = "astar/path_shortcut";
+      shortcut_marker.id = 0;
+      shortcut_marker.type = visualization_msgs::Marker::LINE_STRIP;
+      shortcut_marker.action = visualization_msgs::Marker::ADD;
+      shortcut_marker.pose.orientation.w = 1.0;
+      shortcut_marker.scale.x = 0.06;
+      shortcut_marker.scale.y = 0.08;
+      shortcut_marker.scale.z = 0.08;
+      shortcut_marker.color.a = 1.0;
+      shortcut_marker.color.r = 1.0;
+      shortcut_marker.color.g = 0.6;
+      shortcut_marker.color.b = 0.0;
+
       for (size_t i = 0; i < path.size(); i++)
       {
         geometry_msgs::Point pt;
         pt.x = path[i][0];
         pt.y = path[i][1];
         pt.z = path[i][2];
-        path_marker.points.push_back(pt);
+        shortcut_marker.points.push_back(pt);
       }
-      path_marker_pub.publish(path_marker);
+      path_marker_pub.publish(shortcut_marker);
     }
 
     // --- 发布 nav_msgs::Path 供 DWA 节点订阅（保留旧功能） ---
@@ -179,6 +221,7 @@ int main(int argc, char** argv)
   ros::NodeHandle nh("~"); // 私有命名空间 → /astar_node/
 
   nh.param<std::string>("world_frame", world_frame, "world");
+  enable_shortcut = nh.param<bool>("astar/enable_shortcut", true);
   const int my_id = nh.param<int>("my_id", 0);
   const std::string formation_config_namespace =
       nh.param<std::string>("formation_config_namespace", "/formation_config");

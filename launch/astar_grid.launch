@@ -54,6 +54,7 @@
     <param name="astar/lambda_heu" value="1.0" /> <!-- 启发式权重系数 -->
     <param name="astar/allocated_node_num" value="500000" /> <!-- 最大允许分配的节点数 -->
     <param name="astar/goal_tolerance" value="0.2" /> <!-- 终点容差 (m) -->
+    <param name="astar/enable_shortcut" value="true" /> <!-- 启用贪心去锯齿（可关闭做 A/B 对比） -->
 
     <remap from="/grid_map/cloud" to="/map_generator/global_cloud"/>
     <remap from="/grid_map/odom" to="/$(arg uav_id)/mavros/local_position/odom_world"/>
