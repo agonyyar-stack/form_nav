@@ -24,16 +24,17 @@
         <param name="mpc/u_max" value="2.0" />           <!-- 线速度指令上限 (m/s) -->
         <param name="mpc/w_max" value="2.0" />           <!-- 偏航角速度指令上限 (rad/s) -->
 
-        <param name="mpc/w_ca" value="200.0" />          <!-- 相互碰撞惩罚权重 -->
+        <param name="mpc/w_ca" value="500.0" />          <!-- 相互碰撞惩罚权重 -->
         <param name="mpc/w_form" value="0.0" />        <!-- 编队误差权重-->
         <param name="mpc/d_safe_ca" value="0.7" />     <!-- 编队内硬安全距离 (m)，中心距口径，逼近时惩罚发散 -->
         <param name="mpc/d_act_ca" value="1.6" />      <!-- 编队避碰激活范围 D̄ (m)，中心距口径，须大于 d_safe_ca 且小于编队间距 2.0 -->
 
         <param name="mpc/w_subgoal" value="20000.0" />   <!-- 滚动子目标惩罚权重 -->
-        <param name="mpc/w_yaw" value="1000.0" />        <!-- yaw 参考（子目标方向）软约束权重，复用终端 Q_ -->
+        <param name="mpc/w_yaw" value="3000.0" />        <!-- yaw 参考（子目标方向）软约束权重，复用终端 Q_ -->
         <param name="mpc/lookahead_distance" value="1.0" /> <!-- 滚动子目标前瞻距离 (m) -->
+        <param name="mpc/yaw_lock_dist" value="0.3" />   <!-- 进入终点范围后冻结 yaw 参考的距离 (m) -->
 
-        <param name="mpc/w_oa" value="300.0" />             <!-- 障碍物避障权重 -->
+        <param name="mpc/w_oa" value="500.0" />             <!-- 障碍物避障权重 -->
         <param name="mpc/nearest_obs_num" value="3" />    <!-- 每步查询最近障碍点数量 -->
         <param name="mpc/drone_radius" value="0.3" />     <!-- 无人机半径 (m) -->
         <param name="mpc/safe_dist" value="0.1" />        <!-- 最小安全距离 L (m)，扣除无人机半径 -->

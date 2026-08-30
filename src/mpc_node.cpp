@@ -752,6 +752,7 @@ int main(int argc, char **argv) {
     double neighbor_timeout          = nh_private.param<double>("communication/neighbor_trajectory_timeout", 0.3);
     double neighbor_future_tolerance = nh_private.param<double>("communication/neighbor_future_tolerance", 0.05);
     double lookahead_distance        = nh_private.param<double>("mpc/lookahead_distance", 2.0);
+    double yaw_lock_dist             = nh_private.param<double>("mpc/yaw_lock_dist", 0.3);
     double tau_v                     = nh_private.param<double>("mpc/tau_v", 0.8);
     double tau_w                     = nh_private.param<double>("mpc/tau_w", 0.5);
     double arrival_distance          = nh_private.param<double>("mpc/arrival_distance", 0.1);
@@ -794,6 +795,9 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(lookahead_distance) || lookahead_distance <= 0.0) {
         throw std::runtime_error("mpc/lookahead_distance must be positive");
+    }
+    if (!std::isfinite(yaw_lock_dist) || yaw_lock_dist < 0.0) {
+        throw std::runtime_error("mpc/yaw_lock_dist must be non-negative");
     }
     if (!std::isfinite(arrival_distance) || arrival_distance <= 0.0) {
         throw std::runtime_error("mpc/arrival_distance must be positive");
@@ -881,6 +885,7 @@ int main(int argc, char **argv) {
     mpc_ptr->setCollisionActivationRange(d_act_ca);
     mpc_ptr->setCollisionWeight(w_ca);
     mpc_ptr->setLookaheadDistance(lookahead_distance);
+    mpc_ptr->setYawLockDistance(yaw_lock_dist);
     mpc_ptr->setVelocityTimeConstant(tau_v);
     mpc_ptr->setYawTimeConstant(tau_w);
     tau_v_eff = tau_v;
@@ -905,7 +910,7 @@ int main(int argc, char **argv) {
              "safe_dist=%.2f, detect_range=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
-             "lookahead=%.2f, tau_v=%.2f, tau_w=%.2f, "
+             "lookahead=%.2f, yaw_lock_dist=%.2f, tau_v=%.2f, tau_w=%.2f, "
              "arrival_dist=%.2f, arrival_vel=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
              d_safe_ca, d_act_ca, w_ca, w_form, w_subgoal, w_yaw,
@@ -913,7 +918,7 @@ int main(int argc, char **argv) {
              safe_dist, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
-             lookahead_distance, tau_v, tau_w,
+             lookahead_distance, yaw_lock_dist, tau_v, tau_w,
              ARRIVAL_DISTANCE, ARRIVAL_VELOCITY);
 
     // 第三步：初始化 KD-tree 障碍物地图（静态避障）

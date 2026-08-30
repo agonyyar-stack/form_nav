@@ -139,6 +139,7 @@ private: //存储了 MPC 算法运行时的配置和状态
     double lookahead_distance_;           // 子目标前瞻距离 (m)
     GlobalWaypoint rolling_goal_;         // 最近一次求解使用的子目标
     double yaw_ref_;                      // yaw 参考（子目标方向，复用终端 Q_ 的 yaw 软约束）
+    double yaw_lock_dist_;                // 进入终点范围后冻结 yaw 参考的距离阈值 (m)
     bool has_rolling_goal_;
 public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     Mpc();
@@ -163,6 +164,9 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setMaxAngularVelocity(double w_max) { w_max_ = w_max; w_min_ = -w_max; }
     /// 设置滚动子目标前瞻距离 (m)
     void setLookaheadDistance(double d) { lookahead_distance_ = d; }
+    /// 设置终点 yaw 冻结距离 (m)：距全局终点小于该值时保持机头方向，
+    /// 不再随"指向子目标"的方位角转动（悬停漂移会让该方位角绕圈）
+    void setYawLockDistance(double d) { yaw_lock_dist_ = d; }
     /// 设置线速度一阶时间常数 (s)，<=0 时恢复默认 0.8
     void setVelocityTimeConstant(double tau) { tau_v_ = tau > 0.0 ? tau : 0.8; updateDiscreteModel(); }
     /// 设置偏航角速度一阶时间常数 (s)，<=0 时恢复默认 0.5
