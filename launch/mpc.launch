@@ -49,7 +49,7 @@
         <param name="mpc/w_u" value="20.0" />              <!-- 控制输入惩罚 -->
         <param name="mpc/w_du" value="1000.0" />             <!-- 控制增量惩罚（抑制指令抖动） -->
 
-        <param name="mpc/tau_v" value="0.8" />            <!-- 线速度一阶时间常数 (s) -->
+        <param name="mpc/tau_v" value="0.7" />            <!-- 线速度一阶时间常数 (s) -->
         <param name="mpc/tau_w" value="0.5" />            <!-- 偏航角速度一阶时间常数 (s) -->
         <param name="mpc/arrival_distance" value="0.1" />   <!-- 到达锁定：到终点直线距离阈值 (m) -->
         <param name="mpc/arrival_velocity" value="0.1" />   <!-- 到达锁定：3D 速度阈值 (m/s) -->
