@@ -5,8 +5,8 @@
 Mpc::Mpc() { 
     N_ = 10; //预测步数
     dt_ = 0.05; //时间步长
-    u_max_ = 6; //线速度上限
-    w_max_ = 2; //角速度上限
+    u_max_ = 6; //线速度指令上限 (m/s)
+    w_max_ = 2; //偏航角速度指令上限 (rad/s)
     u_min_ = - u_max_;
     w_min_ = - w_max_;
     //权重矩阵Q,F
@@ -15,18 +15,15 @@ Mpc::Mpc() {
     R_d_ = DM::diag(DM{100, 100, 100, 25});      // 控制增量惩罚（抑制重规划导致的指令抖动）
     // 滚动子目标参数
     lookahead_distance_ = 2.0;                   // 子目标沿弧长前瞻距离 (m)
-    a_brake_ = 0.8 * u_max_;                     // 制动加速度（保守最大减速度）
     has_rolling_goal_ = false;
     // 编队误差权重：与子目标惩罚权重 Q_ 拆分为独立项，默认比 Q_ 小一个数量级
     Q_f_ = DM::diag(DM{2000, 2000, 1000, 10});
-    //运动学参数
-    Lx = 0.83; Kx = 1;
-    Ly = 0.77; Ky = 1;
-    Lz = 0.5; Kz = 1;
-    Lw = 0.51; Kw = M_PI/180;
-    beta = DM::diag(DM{-1/Lx, -1/Ly, -1/Lz, -1/Lw});
-    gama = DM::diag(DM{Kx/Lx, Ky/Ly, Kz/Lz, Kw/Lw});
-    kinematic_equation_ = setKinematicEquation(); 
+    //运动学参数（yaw 与线速度解耦的一阶系统，精确离散化见 updateDiscreteModel）
+    tau_v_ = 0.8;   // 线速度一阶时间常数 (s)
+    tau_w_ = 0.5;   // 偏航角速度一阶时间常数 (s)
+    K_v_ = 1.0;     // 线速度指令稳态增益
+    K_w_ = 1.0;     // 偏航角速度指令稳态增益（指令即真实 yaw rate，不再乘 π/180）
+    updateDiscreteModel();
     // 编队偏移量由外部 setFormationOffsets() 注入，默认自身偏移为 [0,0,0,0]
     // KD-tree 对数势垒避障权重
     Wo = 50000;            // 障碍物避障权重 (标量)
@@ -45,7 +42,10 @@ Mpc::Mpc() {
     built_dt_ = -1.0;
     built_u_max_ = -1.0;
     built_w_max_ = -1.0;
-    built_a_brake_ = -1.0;
+    built_tau_v_ = -1.0;
+    built_tau_w_ = -1.0;
+    built_K_v_ = -1.0;
+    built_K_w_ = -1.0;
     built_neighbor_count_ = 0;
     built_nearest_obs_num_ = -1;
     built_detect_range_ = -1.0;
@@ -66,35 +66,41 @@ Mpc::Mpc() {
 }
 Mpc::~Mpc() {}
 
-Function Mpc::setKinematicEquation() {
-    //定义符号向量
-    //状态向量
-    MX x = MX::sym("x");
-    MX y = MX::sym("y");
-    MX z = MX::sym("z");
-    MX w = MX::sym("w");
-    MX vx = MX::sym("vx");
-    MX vy = MX::sym("vy");
-    MX vz = MX::sym("vz");
-    MX vw = MX::sym("vw");
-    MX state_vars = MX::vertcat({x, y, z, w, vx, vy, vz, vw});
-    //控制向量
-    MX ux = MX::sym("ux");
-    MX uy = MX::sym("uy");
-    MX uz = MX::sym("uz");
-    MX uw = MX::sym("uw");
-    MX control_vars = MX::vertcat({ux, uy, uz, uw});
+// 重建精确离散化系数。连续模型（yaw 与线速度解耦）：
+//   ṗ = v_e,  v̇_e = (K_v v_c - v_e)/τ_v
+//   ψ̇ = ω,    ω̇ = (K_ω ω_c - ω)/τ_ω
+// 一阶系统在零阶保持（每步控制恒定）下具有解析解：
+//   v_{k+1} = α v_k + β v_c,   α = e^(-Δt/τ),  β = K(1-α)
+//   p_{k+1} = p_k + γ v_k + δ v_c,   γ = τ(1-α),  δ = K(Δt-γ)
+// 由此拼成常数矩阵：X_{k+1} = A_ X_k + B_ U_k，替代原来的 Euler 近似。
+void Mpc::updateDiscreteModel() {
+    const double dt = dt_;
 
-    //运动学方程
-    MX rhs = MX::vertcat({
-        cos(w)*vx-sin(w)*vy, 
-        sin(w)*vx+cos(w)*vy, 
-        vz, vw,
-        -vx/Lx+Kx*ux/Lx, 
-        -vy/Ly+Ky*uy/Ly, 
-        -vz/Lz+Kz*uz/Lz, 
-        -vw/Lw+Kw*uw/Lw});
-    return Function("kinematic_equation", {state_vars, control_vars}, {rhs}); 
+    // 线速度通道（x/y/z 共用 τ_v、K_v）
+    const double alpha_v = std::exp(-dt / tau_v_);
+    const double beta_v  = K_v_ * (1.0 - alpha_v);
+    const double gamma_v = tau_v_ * (1.0 - alpha_v);
+    const double delta_v = K_v_ * (dt - gamma_v);
+
+    // 偏航角速度通道（ω 的一阶系统 + ψ 积分）
+    const double alpha_w = std::exp(-dt / tau_w_);
+    const double beta_w  = K_w_ * (1.0 - alpha_w);
+    const double gamma_w = tau_w_ * (1.0 - alpha_w);
+    const double delta_w = K_w_ * (dt - gamma_w);
+
+    // 状态 X = [x, y, z, ψ, vx, vy, vz, ω]，控制 U = [vx_c, vy_c, vz_c, ω_c]
+    A_ = DM::zeros(8, 8);
+    A_(0, 0) = 1.0;  A_(1, 1) = 1.0;  A_(2, 2) = 1.0;  A_(3, 3) = 1.0;
+    A_(0, 4) = gamma_v;  A_(1, 5) = gamma_v;  A_(2, 6) = gamma_v;  // 位置 <- 速度
+    A_(3, 7) = gamma_w;                                               // ψ <- ω
+    A_(4, 4) = alpha_v;  A_(5, 5) = alpha_v;  A_(6, 6) = alpha_v;  // 速度自更新
+    A_(7, 7) = alpha_w;                                               // ω 自更新
+
+    B_ = DM::zeros(8, 4);
+    B_(0, 0) = delta_v;  B_(1, 1) = delta_v;  B_(2, 2) = delta_v;  // 位置 <- 速度指令
+    B_(3, 3) = delta_w;                                               // ψ <- ω_c
+    B_(4, 0) = beta_v;   B_(5, 1) = beta_v;   B_(6, 2) = beta_v;   // 速度 <- 速度指令
+    B_(7, 3) = beta_w;                                                // ω <- ω_c
 }
 // 保存按路径顺序排列的全局轨迹。路径进度用累积弧长表示，局部参考在
 // 每次 solve 前进行数值采样，避免把 CasADi interpolant 放进 Opti 符号图
@@ -292,7 +298,7 @@ ErrorTerms Mpc::formationError(int k_step, MX reference_state, std::map<int, MX>
     // 自身 UAV 状态
     MX p_i = current_states(Slice(0, 4));   // [x, y, z, psi] global
     // MX p_i_dot = mtimes(R_i, v_i);
-    MX v_i = current_states(Slice(4, 8));   // [vx, vy, vz, vw] body
+    MX v_i = current_states(Slice(4, 8));   // [vx, vy, vz, ω] inertial
     MX w_i = p_i(3);
     // MX vw_i = v_i(3);
 
@@ -410,7 +416,9 @@ MX Mpc::ViLmpcDot(int k_step, MX reference_state, std::map<int, MX>& neighbor_pa
 
     MX term3_bracket = MX::zeros(4, 1);
 
-    MX temp = mtimes(R_i_dot, v_i) + mtimes(R_i, mtimes(beta, v_i) + mtimes(gama, U_k));
+    // 旧模型（yaw/速度耦合）的反步法项：新解耦模型下需按
+    // v̇=(K_v v_c-v)/τ_v、ω̇=(K_ω ω_c-ω)/τ_ω 重写后才可恢复。
+    MX temp = MX::zeros(4, 1);
 
     term3_bracket += - (d_i + b_i) * temp;
 
@@ -526,7 +534,10 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         built_N_ == N_ && std::abs(built_dt_ - dt_) < 1e-9 &&
         std::abs(built_u_max_ - u_max_) < 1e-9 &&
         std::abs(built_w_max_ - w_max_) < 1e-9 &&
-        std::abs(built_a_brake_ - a_brake_) < 1e-9 &&
+        std::abs(built_tau_v_ - tau_v_) < 1e-9 &&
+        std::abs(built_tau_w_ - tau_w_) < 1e-9 &&
+        std::abs(built_K_v_ - K_v_) < 1e-9 &&
+        std::abs(built_K_w_ - K_w_) < 1e-9 &&
         built_neighbor_count_ == neighbors.size() &&
         built_nearest_obs_num_ == nearest_obs_num_ &&
         std::abs(built_detect_range_ - detect_range_) < 1e-9 &&
@@ -542,7 +553,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     Slice all; //切片工具，代表所有索引
 
     X = opti_->variable(8, N_ + 1); //状态序列，位姿速度
-    U = opti_->variable(4, N_); //控制序列,速度指令(机体坐标系)
+    U = opti_->variable(4, N_); //控制序列：惯性系线速度指令 + yaw rate 指令
 
     // 参数：滚动子目标参考、当前状态、最近障碍点（KD-tree 查询在求解器外完成）、终点
     reference_param_ = opti_->parameter(4, N_ + 1);
@@ -593,31 +604,27 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     }
     opti_->minimize(cost);
 
-    // 动力学约束
+    // 动力学约束（精确离散化，非 Euler 近似）：
+    //   X_{k+1} = A_ X_k + B_ U_k
+    // 线速度为惯性系独立状态，与 yaw 解耦；U 为惯性系线速度指令 + yaw rate 指令。
     for (int k = 0; k < N_; ++k) {
-        vector<MX> inputs = {X(all, k), U(all, k)}; //U为机体坐标系
-        MX x_dot = kinematic_equation_(inputs)[0]; //运动学方程唯一输出
-        MX x_next = X(all, k) + x_dot * dt_;
-        opti_->subject_to(X(all, k + 1) == x_next);
+        opti_->subject_to(X(all, k + 1) ==
+                          mtimes(A_, X(all, k)) + mtimes(B_, U(all, k)));
     }
 
     // 初始状态约束
     opti_->subject_to(X(all, 0) == X_cur_param_);
 
-    // 制动不等式约束：保证预测轨迹在终点前能减速停下。
-    //   ||v_world_k||^2 <= 2 * a_brake * d_g_k
-    // d_g_k 为第 k 步预测位置到终点的直线距离，a_brake 为保守最大制动加速度。
+    // 制动约束：保证预测轨迹在终点前能减速停下。
+    // 解耦模型下 v_c = 0 时一阶系统总停车距离精确等于 tau_v * ||v||，
+    // 因此采用精确停车约束（替代原近似二次约束）：
+    //   tau_v * ||v_k|| <= d_g_k
+    // d_g_k 为第 k 步预测位置到终点的直线距离。
     for (int k = 0; k <= N_; ++k) {
         MX X_k = X(all, k);
-        MX w_k = X_k(3);
         MX v_k = X_k(Slice(4, 8));
-        MX v_world = MX::vertcat({
-            cos(w_k) * v_k(0) - sin(w_k) * v_k(1),
-            sin(w_k) * v_k(0) + cos(w_k) * v_k(1),
-            v_k(2)});
         MX d_g = MX::norm_2(X_k(Slice(0, 3)) - goal_param_);
-        MX v_norm_sq = MX::dot(v_world, v_world);
-        opti_->subject_to(v_norm_sq <= 2.0 * a_brake_ * d_g);
+        opti_->subject_to(tau_v_ * MX::norm_2(v_k(Slice(0, 3))) <= d_g);
     }
 
     // 输入约束
@@ -642,7 +649,10 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     built_dt_ = dt_;
     built_u_max_ = u_max_;
     built_w_max_ = w_max_;
-    built_a_brake_ = a_brake_;
+    built_tau_v_ = tau_v_;
+    built_tau_w_ = tau_w_;
+    built_K_v_ = K_v_;
+    built_K_w_ = K_w_;
     built_neighbor_count_ = neighbors.size();
     built_nearest_obs_num_ = nearest_obs_num_;
     built_detect_range_ = detect_range_;

@@ -21,8 +21,8 @@
         <!-- MPC 可调参数 -->
         <param name="mpc/N" value="10" />               <!-- 预测步长 -->
         <param name="mpc/dt" value="0.05" />             <!-- 时间步长 (s) -->
-        <param name="mpc/u_max" value="2.0" />           <!-- 线速度/加速度上限 -->
-        <param name="mpc/w_max" value="2.0" />           <!-- 角速度/加速度上限 -->
+        <param name="mpc/u_max" value="2.0" />           <!-- 线速度指令上限 (m/s) -->
+        <param name="mpc/w_max" value="2.0" />           <!-- 偏航角速度指令上限 (rad/s) -->
 
         <param name="mpc/w_ca" value="200.0" />          <!-- 相互碰撞惩罚权重 -->
         <param name="mpc/w_form" value="0.0" />        <!-- 编队误差权重-->
@@ -49,7 +49,8 @@
         <param name="mpc/w_u" value="1.0" />              <!-- 控制输入惩罚 -->
         <param name="mpc/w_du" value="1000.0" />             <!-- 控制增量惩罚（抑制指令抖动） -->
 
-        <param name="mpc/a_brake" value="0.0" />            <!-- 制动加速度 (m/s^2)，0 表示自动取 0.8*u_max -->
+        <param name="mpc/tau_v" value="0.8" />            <!-- 线速度一阶时间常数 (s) -->
+        <param name="mpc/tau_w" value="0.5" />            <!-- 偏航角速度一阶时间常数 (s) -->
         <param name="mpc/arrival_distance" value="0.1" />   <!-- 到达锁定：到终点直线距离阈值 (m) -->
         <param name="mpc/arrival_velocity" value="0.1" />   <!-- 到达锁定：3D 速度阈值 (m/s) -->
 
