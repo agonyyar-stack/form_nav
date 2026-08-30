@@ -734,6 +734,7 @@ int main(int argc, char **argv) {
     double w_ca      = nh_private.param<double>("mpc/w_ca", 200.0);
     double w_form    = nh_private.param<double>("mpc/w_form", 2000.0);
     double w_subgoal = nh_private.param<double>("mpc/w_subgoal", 20000.0);
+    double w_yaw     = nh_private.param<double>("mpc/w_yaw", 1000.0);
     int nearest_obs_num = nh_private.param<int>("mpc/nearest_obs_num", 3);
     double drone_radius = nh_private.param<double>("mpc/drone_radius", 0.35);
     double safe_dist    = nh_private.param<double>("mpc/safe_dist", 0.5);
@@ -787,6 +788,9 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(w_subgoal) || w_subgoal < 0.0) {
         throw std::runtime_error("mpc/w_subgoal must be non-negative");
+    }
+    if (!std::isfinite(w_yaw) || w_yaw < 0.0) {
+        throw std::runtime_error("mpc/w_yaw must be non-negative");
     }
     if (!std::isfinite(lookahead_distance) || lookahead_distance <= 0.0) {
         throw std::runtime_error("mpc/lookahead_distance must be positive");
@@ -885,23 +889,26 @@ int main(int argc, char **argv) {
     mpc_ptr->setControlIncrementWeight(
         DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
     // 编队误差权重：独立于子目标惩罚权重（默认小一个数量级），
-    // 相对比例与 Q_ 保持一致（x:y:z:yaw = 1:1:0.5:0.005）。
+    // yaw 通道恒为 0 —— yaw 只跟踪各自速度/子目标方向，编队误差不再拉齐机头，
+    // 避免与 yaw 参考（子目标方向）打架。
     mpc_ptr->setFormationErrorWeight(
-        DM::diag(DM{w_form, w_form, w_form / 2.0, w_form / 200.0}));
-    // 滚动子目标惩罚权重（原 Q_）：相对比例与默认一致（x:y:z:yaw = 1:1:0.5:0.005）
+        DM::diag(DM{w_form, w_form, w_form / 2.0, 0.0}));
+    // 滚动子目标惩罚权重（原 Q_）：位置 x:y:z = 1:1:0.5；
+    // yaw 通道用独立参数 w_yaw（默认 1000，约为位置权重的 1/20），
+    // 复用现有终端软约束跟踪子目标方向，不新增代价项。
     mpc_ptr->setSubgoalWeight(
-        DM::diag(DM{w_subgoal, w_subgoal, w_subgoal / 2.0, w_subgoal / 200.0}));
+        DM::diag(DM{w_subgoal, w_subgoal, w_subgoal / 2.0, w_yaw}));
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
              "d_safe_ca=%.2f, d_act_ca=%.2f, w_ca=%.2f, "
-             "w_form=%.2f, w_subgoal=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
+             "w_form=%.2f, w_subgoal=%.2f, w_yaw=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
              "safe_dist=%.2f, detect_range=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
              "lookahead=%.2f, tau_v=%.2f, tau_w=%.2f, "
              "arrival_dist=%.2f, arrival_vel=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_ca, d_act_ca, w_ca, w_form, w_subgoal,
+             d_safe_ca, d_act_ca, w_ca, w_form, w_subgoal, w_yaw,
              nearest_obs_num, drone_radius, w_oa,
              safe_dist, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,

@@ -138,6 +138,7 @@ private: //存储了 MPC 算法运行时的配置和状态
     std::vector<double> path_arclength_;  // 与 global_traj_ 同步的累积弧长 (m)
     double lookahead_distance_;           // 子目标前瞻距离 (m)
     GlobalWaypoint rolling_goal_;         // 最近一次求解使用的子目标
+    double yaw_ref_;                      // yaw 参考（子目标方向，复用终端 Q_ 的 yaw 软约束）
     bool has_rolling_goal_;
 public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     Mpc();

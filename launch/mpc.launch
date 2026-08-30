@@ -30,6 +30,7 @@
         <param name="mpc/d_act_ca" value="1.6" />      <!-- 编队避碰激活范围 D̄ (m)，中心距口径，须大于 d_safe_ca 且小于编队间距 2.0 -->
 
         <param name="mpc/w_subgoal" value="20000.0" />   <!-- 滚动子目标惩罚权重 -->
+        <param name="mpc/w_yaw" value="1000.0" />        <!-- yaw 参考（子目标方向）软约束权重，复用终端 Q_ -->
         <param name="mpc/lookahead_distance" value="1.0" /> <!-- 滚动子目标前瞻距离 (m) -->
 
         <param name="mpc/w_oa" value="300.0" />             <!-- 障碍物避障权重 -->

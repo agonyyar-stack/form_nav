@@ -15,6 +15,7 @@ Mpc::Mpc() {
     R_d_ = DM::diag(DM{100, 100, 100, 25});      // 控制增量惩罚（抑制重规划导致的指令抖动）
     // 滚动子目标参数
     lookahead_distance_ = 2.0;                   // 子目标沿弧长前瞻距离 (m)
+    yaw_ref_ = 0.0;                              // yaw 参考：由 solve() 按子目标方向更新
     has_rolling_goal_ = false;
     // 编队误差权重：与子目标惩罚权重 Q_ 拆分为独立项，默认比 Q_ 小一个数量级
     Q_f_ = DM::diag(DM{2000, 2000, 1000, 10});
@@ -698,12 +699,27 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors, Eigen::Vector
         return false;
     }
 
+    // yaw 参考 = 子目标方向（不新增代价项，复用终端 Q_ 的 yaw 软约束）：
+    //   当前点 -> 滚动子目标 的水平方向角。与子目标距离过近（at 目标点附近）
+    //   时方向无定义，保持上一周期参考；相对当前 yaw 做 ±π 连续化（unwrap），
+    //   避免参考在路径折角处跳 ±π 导致 (ψ-ψ_ref)² 出现尖点/绕远路旋转。
+    const Eigen::Vector3d yaw_ref_vec(rolling_goal_.x - current_states(0),
+                                      rolling_goal_.y - current_states(1), 0.0);
+    if (yaw_ref_vec.norm() > 1e-3) {
+        const double psi_cur = current_states(3);
+        const double yaw_candidate =
+            std::atan2(yaw_ref_vec.y(), yaw_ref_vec.x());
+        yaw_ref_ = yaw_candidate +
+                   2.0 * M_PI * std::round((psi_cur - yaw_candidate) /
+                                           (2.0 * M_PI));
+    }
+
     std::vector<double> reference_values;
     reference_values.reserve(4 * (N_ + 1));
     for (int k = 0; k <= N_; ++k) {
         reference_values.insert(reference_values.end(),
                                 {rolling_goal_.x, rolling_goal_.y,
-                                 rolling_goal_.z, 0.0});
+                                 rolling_goal_.z, yaw_ref_});
     }
     opti_->set_value(reference_param_,
                      casadi::DM::reshape(DM(reference_values), 4, N_ + 1));
