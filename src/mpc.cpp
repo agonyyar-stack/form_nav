@@ -619,12 +619,16 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     // 解耦模型下 v_c = 0 时一阶系统总停车距离精确等于 tau_v * ||v||，
     // 因此采用精确停车约束（替代原近似二次约束）：
     //   tau_v * ||v_k|| <= d_g_k
-    // d_g_k 为第 k 步预测位置到终点的直线距离。
+    // 注意：norm_2 在 v=0 处不可导，IPOPT 在默认零初值处求雅可比会得到
+    // NaN（Invalid_Number_Detected）。两边平方化为等价且处处光滑的形式：
+    //   tau_v^2 * ||v_k||^2 <= d_g_k^2
     for (int k = 0; k <= N_; ++k) {
         MX X_k = X(all, k);
         MX v_k = X_k(Slice(4, 8));
-        MX d_g = MX::norm_2(X_k(Slice(0, 3)) - goal_param_);
-        opti_->subject_to(tau_v_ * MX::norm_2(v_k(Slice(0, 3))) <= d_g);
+        MX d_g_vec = X_k(Slice(0, 3)) - goal_param_;
+        MX v_norm_sq = MX::dot(v_k(Slice(0, 3)), v_k(Slice(0, 3)));
+        MX d_g_sq = MX::dot(d_g_vec, d_g_vec);
+        opti_->subject_to(tau_v_ * tau_v_ * v_norm_sq <= d_g_sq);
     }
 
     // 输入约束
