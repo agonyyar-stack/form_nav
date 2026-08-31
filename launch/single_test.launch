@@ -1,20 +1,20 @@
 <launch>
-    <!-- random=随机障碍物, fixed=固定复杂场景 -->
-    <arg name="scene" default="random" />
+    <!-- 1=fixed（固定复杂场景）, 2=random（随机障碍物） -->
+    <arg name="scene" default="2" />
     <!-- 全局层算法选择: kino_astar=kinodynamic A*, astar=纯 A* -->
-    <arg name="global_planner" default="astar" />
+    <arg name="global_planner" default="1" /> <!-- 1=astar（纯 A*）, 2=kino_astar（kinodynamic A*） -->
 
     <!-- gazebo -->
     <include file="$(find form_nav)/launch/single_uav_gazebo.launch">
     </include>
 
-    <group unless="$(eval arg('scene') == 'fixed')">
+    <group unless="$(eval arg('scene') == 1)">
         <!-- 静态障碍物地图生成 -->
         <!-- pkg：指定哪个 ROS 包，type：包里要运行的可执行文件名，name：该节点启动后在 ROS 系统里注册的名字 -->
         <!-- CMake 中的可执行文件名为 random_obs。保留节点名 random_static_obs，
              仅修正 type，避免 launch 找不到可执行文件。 -->
         <node pkg="form_nav" type="random_obs" name="random_obs" output="screen" >
-            <param name="pattern" value="3" /> <!-- 1=静态(默认), 2=动态, 3=静+动 -->
+            <param name="pattern" value="2" /> <!-- 1=静态(默认), 2=动态, 3=静+动 -->
 
             <param name="map/x_size"     value="40.0" /> <!-- 地图的x轴大小 -->
             <param name="map/y_size"     value="40.0" /> <!-- 地图的y轴大小 -->
@@ -42,7 +42,7 @@
             <param name="dyn_obs/traj_dt"  value="0.05" /> <!-- 障碍物轨迹采样步长 (s)，对齐 MPC -->
             <param name="dyn_obs/traj_steps" value="21" /> <!-- 障碍物轨迹步数 (N+1)，N=20 -->
             <param name="dyn_obs/speed_l"  value="0.5" /> <!-- 速度范围 -->
-            <param name="dyn_obs/speed_h"  value="2.0" />
+            <param name="dyn_obs/speed_h"  value="1.0" />
             <param name="dyn_obs/period_l" value="3.0" /> <!-- 周期范围 -->
             <param name="dyn_obs/period_h" value="8.0" />
             <param name="dyn_obs/radius_l" value="1.5" />  <!-- 轨迹半径范围 -->
@@ -50,7 +50,7 @@
         </node>
     </group>
 
-    <group if="$(eval arg('scene') == 'fixed')">
+    <group if="$(eval arg('scene') == 1)">
         <include file="$(find form_nav)/launch/fixed_obs.launch">
             <arg name="rviz" value="false" />
         </include>
@@ -73,7 +73,7 @@
     </include>
 
     <!-- 全局规划器（kinoA*） -->
-    <group if="$(eval arg('global_planner') == 'kino_astar')">
+    <group if="$(eval arg('global_planner') == 2)">
     <include file="$(find form_nav)/launch/kino_astar_grid.launch">
         <arg name="uav_id" value="uav0" />
         <arg name="my_id" value="0" />
@@ -82,7 +82,7 @@
     </group>
 
     <!-- 全局规划器（纯 A*） -->
-    <group if="$(eval arg('global_planner') == 'astar')">
+    <group if="$(eval arg('global_planner') == 1)">
     <include file="$(find form_nav)/launch/astar_grid.launch">
         <arg name="uav_id" value="uav0" />
         <arg name="my_id" value="0" />

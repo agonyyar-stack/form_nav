@@ -105,7 +105,7 @@ private: //存储了 MPC 算法运行时的配置和状态
     MX reference_param_;                        // 滚动子目标参考参数 (4, N_+1) [x,y,z,yaw]，各列相同
     MX X_cur_param_;                            // 当前状态参数 (8, 1)
     MX obstacle_param_;                         // 最近障碍点参数 (3*M, N_+1)
-    MX dyn_obs_pos_param_;                      // 动态障碍物位置参数 (3*C, N_+1)
+    MX dyn_obs_seg_param_;                      // 动态障碍物最近线段端点参数 (6*C, N_+1)
     MX dyn_obs_shape_param_;                    // 动态障碍物形状参数 (3, C) [shape, radius, height]
     MX goal_param_;                             // 终点位置参数 (3, 1)，用于制动约束
     std::map<int, MX> neighbor_params_;         // 邻居预测轨迹参数
@@ -244,7 +244,7 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 基于 KD-tree 最近障碍点的对数势垒避障项（障碍点作为参数，不在符号图内查询）
     MX kdtreeObstacleAvoidance(MX current_states, MX obstacle_k);
 
-    /// 基于动态障碍物已知轨迹的形状感知对数势垒避障项（位置/形状均为参数）
+    /// 基于动态障碍物已知轨迹的形状感知对数势垒避障项（最近线段端点/形状均为参数）
     MX dynamicObstacleAvoidance(MX current_states, int k_step);
 
     MX collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& neighbor_params, MX current_states); //编队内碰撞避让项
@@ -256,6 +256,13 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 对查询点集合查询最近障碍点并填充 obstacle 参数值（含索引，供重规划判断）
     std::vector<double> queryObstacleValues(
         const std::vector<Eigen::Vector3d>& query_pts,
+        std::vector<int>& out_indices);
+
+    /// 对查询点集合查询每个动态障碍物轨迹上的最近线段（0.5 s 窗口、0.1 s 节点折线），
+    /// 填充线段端点参数 (6*C, N_+1) 并返回线段索引（供重规划判断）
+    std::vector<double> queryDynamicObstacleSegments(
+        const std::vector<Eigen::Vector3d>& query_pts,
+        const std::vector<DynamicObstacleState>& dyn_obs,
         std::vector<int>& out_indices);
 
     bool solve(double s0, const std::vector<UavState>& neighbors,

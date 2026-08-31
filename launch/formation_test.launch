@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="rviz" default="true" />
-  <arg name="scene" default="fixed" /> <!-- random=随机障碍物, fixed=固定复杂场景 -->
+  <arg name="scene" default="1" /> <!-- 1=fixed（固定复杂场景）, 2=random（随机障碍物） -->
   <arg name="world_frame" default="world" />
   <arg name="formation_config_file"
        default="$(find form_nav)/config/formations.yaml" />
@@ -9,12 +9,12 @@
   <arg name="neighbor_trajectory_timeout" default="0.3" />
   <arg name="neighbor_future_tolerance" default="0.05" />
   <!-- 全局层算法选择: kino_astar=kinodynamic A*, astar=纯 A* -->
-  <arg name="global_planner" default="astar" />
+  <arg name="global_planner" default="1" /> <!-- 1=astar（纯 A*）, 2=kino_astar（kinodynamic A*） -->
 
   <include file="$(find form_nav)/launch/multi_uav_gazebo.launch">
   </include>
 
-  <group unless="$(eval arg('scene') == 'fixed')">
+  <group unless="$(eval arg('scene') == 1)">
     <node pkg="form_nav" type="random_obs" name="random_obs" output="screen" >
       <param name="pattern" value="1" /> <!-- 1=静态(默认), 2=动态, 3=静+动 -->
 
@@ -52,7 +52,7 @@
     </node>
   </group>
 
-  <group if="$(eval arg('scene') == 'fixed')">
+  <group if="$(eval arg('scene') == 1)">
     <include file="$(find form_nav)/launch/fixed_obs.launch">
       <arg name="rviz" value="false" />
     </include>
@@ -124,7 +124,7 @@
   </include>
 
   <!-- ========== 全局规划器（kinoA*） ========== -->
-  <group if="$(eval arg('global_planner') == 'kino_astar')">
+  <group if="$(eval arg('global_planner') == 2)">
   <include file="$(find form_nav)/launch/kino_astar_grid.launch">
     <arg name="uav_id" value="uav0" />
     <arg name="my_id" value="0" />
@@ -176,7 +176,7 @@
   </group>
 
   <!-- ========== 全局规划器（纯 A*） ========== -->
-  <group if="$(eval arg('global_planner') == 'astar')">
+  <group if="$(eval arg('global_planner') == 1)">
   <include file="$(find form_nav)/launch/astar_grid.launch">
     <arg name="uav_id" value="uav0" />
     <arg name="my_id" value="0" />
