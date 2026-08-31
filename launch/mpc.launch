@@ -19,7 +19,7 @@
         <param name="local_frame" value="$(arg uav_id)/map" />
         <param name="formation_config_namespace" value="$(arg formation_config_namespace)" />
         <!-- MPC 可调参数 -->
-        <param name="mpc/N" value="10" />               <!-- 预测步长 -->
+        <param name="mpc/N" value="20" />               <!-- 预测步长 -->
         <param name="mpc/dt" value="0.05" />             <!-- 时间步长 (s) -->
         <param name="mpc/u_max" value="2.0" />           <!-- 线速度指令上限 (m/s) -->
         <param name="mpc/w_max" value="2.0" />           <!-- 偏航角速度指令上限 (rad/s) -->
@@ -31,7 +31,7 @@
 
         <param name="mpc/w_subgoal" value="1000.0" />   <!-- 滚动子目标惩罚权重 -->
         <param name="mpc/w_yaw" value="100.0" />        <!-- yaw 参考（子目标方向）软约束权重，复用终端 Q_ -->
-        <param name="mpc/lookahead_distance" value="1.0" /> <!-- 滚动子目标前瞻距离 (m) -->
+        <param name="mpc/lookahead_distance" value="2.0" /> <!-- 滚动子目标前瞻距离 (m) -->
         <param name="mpc/yaw_lock_dist" value="0.3" />   <!-- 进入终点范围后冻结 yaw 参考的距离 (m) -->
 
         <param name="mpc/w_oa" value="10.0" />             <!-- 障碍物避障权重 -->
