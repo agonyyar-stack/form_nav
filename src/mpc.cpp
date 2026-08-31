@@ -462,9 +462,7 @@ MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
     return H_oa;
 }
 
-std::vector<double> Mpc::queryObstacleValues(
-    const std::vector<Eigen::Vector3d>& query_pts,
-    std::vector<int>& out_indices) {
+std::vector<double> Mpc::queryObstacleValues(const std::vector<Eigen::Vector3d>& query_pts, std::vector<int>& out_indices) {
     const int steps = static_cast<int>(query_pts.size());
     const int total = nearest_obs_num_ * steps;
     std::vector<double> values(3 * total, 1e4);
