@@ -29,6 +29,10 @@ Mpc::Mpc() {
     // 编队偏移量由外部 setFormationOffsets() 注入，默认自身偏移为 [0,0,0,0]
     // KD-tree 对数势垒避障权重
     Wo = 50000;            // 障碍物避障权重 (标量)
+    // 动态障碍物避障（已知轨迹 + 形状感知）
+    W_dyn_ = 300;          // 动态障碍物势垒权重 (标量)
+    d_safe_dyn_ = 0.2;     // 动态障碍物最小安全距离 (m，表面口径)
+    d_act_dyn_ = 2.5;      // 动态障碍物激活范围 (m)
     // KD-tree 静态避障参数（第三步）
     kd_tree_ptr_ = nullptr;   // 障碍物 KD-tree 指针，由外部设置
     nearest_obs_num_ = 3;     // 每个预测步查询的最近障碍点数量
@@ -52,6 +56,7 @@ Mpc::Mpc() {
     built_nearest_obs_num_ = -1;
     built_detect_range_ = -1.0;
     built_safe_dist_ = -1.0;
+    built_dyn_obs_count_ = 0;
     built_d_safe_ca_ = -1.0;
     built_d_act_ca_ = -1.0;
     built_ipopt_max_iter_ = -1;
@@ -462,6 +467,58 @@ MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
     return H_oa;
 }
 
+// 动态障碍物形状感知避障势垒。障碍物位置与形状均为参数：
+//   dyn_obs_pos_param_ (3*C, N_+1)：列 k 存放所有障碍物第 k 步位置；
+//   dyn_obs_shape_param_ (3, C)：每列 [shape, radius, height]。
+// 距离口径：先算"无人机中心到障碍物表面"的距离 d_surface（球体扣半径、
+// 圆柱按竖直柱体分段精确到表面），再扣无人机半径得到有效距离 d_eff，
+// 与静态 KD-tree 项一致；对数势垒参数独立（W_dyn_/d_safe_dyn_/d_act_dyn_），
+// 不复用编队避碰参数（编队为双向避让，动态障碍物为单向且可能更快）。
+MX Mpc::dynamicObstacleAvoidance(MX current_states, int k_step) {
+    MX H_dyn = MX(0.0);
+    const int C = dyn_obs_shape_param_.size2();
+    if (C <= 0 || d_act_dyn_ <= d_safe_dyn_) {
+        return H_dyn;
+    }
+
+    MX pos = current_states(Slice(0, 3));
+    for (int j = 0; j < C; ++j) {
+        MX o = dyn_obs_pos_param_(Slice(3 * j, 3 * j + 3), k_step);
+        MX shape = dyn_obs_shape_param_(0, j);
+        MX R = dyn_obs_shape_param_(1, j);
+        MX H = dyn_obs_shape_param_(2, j);
+
+        MX dx = pos(0) - o(0);
+        MX dy = pos(1) - o(1);
+        MX dz = pos(2) - o(2);
+
+        // 球体：任意方向距离减半径
+        MX sphere_dist = MX::norm_2(pos - o) - R;
+
+        // 竖直圆柱：高度带内用水平距离减半径；正上/正下用竖直距离；
+        // 角上用边缘圆环距离（sqrt 参数恒非负）。
+        MX rho = MX::sqrt(dx * dx + dy * dy);
+        MX d_horiz = rho - R;
+        MX d_vert = fabs(dz) - H / 2.0;
+        MX d_rim = MX::sqrt(d_horiz * d_horiz + d_vert * d_vert);
+        MX in_band = fabs(dz) <= H / 2.0;
+        MX in_foot = rho <= R;
+        MX cyl_dist = MX::if_else(
+            in_band, d_horiz, MX::if_else(in_foot, d_vert, d_rim));
+
+        // 形状分支：0=球体，1=圆柱
+        MX d_surface = MX::if_else(shape == 0.0, sphere_dist, cyl_dist);
+
+        // 统一口径：扣无人机半径；对数势垒钳位防 log 参数非正
+        MX d_eff = d_surface - drone_radius_;
+        MX d_c = MX::fmax(d_eff, d_safe_dyn_ + 1e-2);
+        MX term = W_dyn_ * MX::fmax(
+            0.0, -log((d_c - d_safe_dyn_) / (d_act_dyn_ - d_safe_dyn_)));
+        H_dyn += term;
+    }
+    return H_dyn;
+}
+
 std::vector<double> Mpc::queryObstacleValues(const std::vector<Eigen::Vector3d>& query_pts, std::vector<int>& out_indices) {
     const int steps = static_cast<int>(query_pts.size());
     const int total = nearest_obs_num_ * steps;
@@ -528,7 +585,8 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
 // 构建（或复用）Opti 优化问题。配置（预测时域、时间步、输入限幅、
 // 邻居数量、最近障碍点数量）变化时重建；否则复用同一实例，仅更新参数值。
 // 复用 + 热启动是第三步重规划循环能够在 20 Hz 控制率下运行的前提。
-bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
+bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
+                    const std::vector<DynamicObstacleState>& dyn_obs) {
     if (opti_ &&
         built_N_ == N_ && std::abs(built_dt_ - dt_) < 1e-9 &&
         std::abs(built_u_max_ - u_max_) < 1e-9 &&
@@ -541,6 +599,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         built_nearest_obs_num_ == nearest_obs_num_ &&
         std::abs(built_detect_range_ - detect_range_) < 1e-9 &&
         std::abs(built_safe_dist_ - safe_dist_) < 1e-9 &&
+        built_dyn_obs_count_ == dyn_obs.size() &&
         std::abs(built_d_safe_ca_ - d_safe_ca) < 1e-9 &&
         std::abs(built_d_act_ca_ - d_act_ca) < 1e-9 &&
         built_ipopt_max_iter_ == ipopt_max_iter_ &&
@@ -559,6 +618,15 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     X_cur_param_ = opti_->parameter(8, 1);
     obstacle_param_ = opti_->parameter(3 * nearest_obs_num_, N_ + 1);
     goal_param_ = opti_->parameter(3, 1);
+
+    // 动态障碍物：位置参数 (3*C, N_+1)，形状参数 (3, C) [shape, radius, height]
+    // 位置/形状均为参数，只有数量变化才重建 Opti。
+    if (!dyn_obs.empty()) {
+        dyn_obs_pos_param_ = opti_->parameter(
+            3 * static_cast<int>(dyn_obs.size()), N_ + 1);
+        dyn_obs_shape_param_ = opti_->parameter(
+            3, static_cast<int>(dyn_obs.size()));
+    }
 
     // 邻居轨迹参数
     neighbor_params_.clear();
@@ -582,6 +650,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
         // KD-tree 对数势垒避障代价（障碍点是参数，代价处处可导）
         MX H_oa_kd = kdtreeObstacleAvoidance(X_k, obstacle_param_(all, k));
         cost += H_oa_kd;
+        // 动态障碍物形状感知势垒（已知轨迹，位置/形状均为参数）
+        cost += dynamicObstacleAvoidance(X_k, k);
 
         if (k < N_) {
             // 子目标惩罚只加在终端步，中间步仅编队项独立加权，互不耦合
@@ -660,6 +730,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     built_nearest_obs_num_ = nearest_obs_num_;
     built_detect_range_ = detect_range_;
     built_safe_dist_ = safe_dist_;
+    built_dyn_obs_count_ = dyn_obs.size();
     built_d_safe_ca_ = d_safe_ca;
     built_d_act_ca_ = d_act_ca;
     built_ipopt_max_iter_ = ipopt_max_iter_;
@@ -668,7 +739,9 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors) {
     return true;
 }
 
-bool Mpc::solve(double s0, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states) {
+bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
+                const std::vector<DynamicObstacleState>& dyn_obs,
+                Eigen::VectorXd current_states) {
     // 控制节点负责等待传感器和全局轨迹；这里再做一次尺寸检查，避免
     // 未初始化状态进入 CasADi 参数并产生难以定位的维度错误。
     if (current_states.size() != 8) {
@@ -685,7 +758,7 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors, Eigen::Vector
         return false;
     }
 
-    if (!buildOpti(neighbors)) {
+    if (!buildOpti(neighbors, dyn_obs)) {
         return false;
     }
 
@@ -757,6 +830,41 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors, Eigen::Vector
         // Eigen 默认列优先，CasADi 也是列优先填充
         opti_->set_value(it->second,
                          casadi::DM::reshape(DM(nb_vec), 8, N_ + 1));
+    }
+
+    // 动态障碍物参数：位置按列优先填充 (3*C, N_+1)，形状 [shape, radius, height]
+    // 每列一个障碍物。障碍物轨迹为已知/预测轨迹，采样网格与 MPC 预测对齐。
+    if (!dyn_obs.empty()) {
+        std::vector<double> dyn_pos_vec(3 * dyn_obs.size() * (N_ + 1), 1e4);
+        for (size_t j = 0; j < dyn_obs.size(); ++j) {
+            const Eigen::MatrixXd& states = dyn_obs[j].predicted_states;
+            if (states.rows() != 8 || states.cols() != N_ + 1) {
+                std::cerr << "[MPC] Dynamic obstacle " << dyn_obs[j].id
+                          << " predicted states shape mismatch." << std::endl;
+                return false;
+            }
+            for (int k = 0; k <= N_; ++k) {
+                for (int m = 0; m < 3; ++m) {
+                    dyn_pos_vec[(3 * j + m) * (N_ + 1) + k] = states(m, k);
+                }
+            }
+        }
+        opti_->set_value(
+            dyn_obs_pos_param_,
+            casadi::DM::reshape(
+                DM(dyn_pos_vec), 3 * static_cast<int>(dyn_obs.size()), N_ + 1));
+
+        std::vector<double> dyn_shape_vec;
+        dyn_shape_vec.reserve(3 * dyn_obs.size());
+        for (const auto& ob : dyn_obs) {
+            dyn_shape_vec.push_back(static_cast<double>(ob.shape));
+            dyn_shape_vec.push_back(ob.radius);
+            dyn_shape_vec.push_back(ob.height);
+        }
+        opti_->set_value(
+            dyn_obs_shape_param_,
+            casadi::DM::reshape(
+                DM(dyn_shape_vec), 3, static_cast<int>(dyn_obs.size())));
     }
 
     // 查询点：

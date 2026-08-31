@@ -39,8 +39,10 @@
       <param name="min_distance" value="1.2"/> <!-- 障碍物最小间距 -->
 
       <param name="dyn_obs/num"      value="20" />
-      <param name="dyn_obs/size"     value="0.8" />  <!-- 底面边长 -->
-      <param name="dyn_obs/height"   value="2.0" />  <!-- 高度 -->
+      <param name="dyn_obs/size"     value="0.3" />  <!-- 障碍物半径 -->
+      <param name="dyn_obs/height"   value="2.0" />  <!-- 圆柱高度 -->
+      <param name="dyn_obs/traj_dt"  value="0.05" /> <!-- 障碍物轨迹采样步长 (s)，对齐 MPC -->
+      <param name="dyn_obs/traj_steps" value="21" /> <!-- 障碍物轨迹步数 (N+1)，N=20 -->
       <param name="dyn_obs/speed_l"  value="0.5" /> <!-- 速度范围 -->
       <param name="dyn_obs/speed_h"  value="2.0" />
       <param name="dyn_obs/period_l" value="3.0" /> <!-- 周期范围 -->

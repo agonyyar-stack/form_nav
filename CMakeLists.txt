@@ -29,6 +29,7 @@ find_package(casadi REQUIRED)
 
 add_message_files(
   FILES
+  DynamicObstacleTrajectory.msg
   GlobalPathProgress.msg
   GlobalTrajectory.msg
   PredictedTrajectory.msg
@@ -74,6 +75,7 @@ link_directories(/usr/local/lib)
 
 add_executable(random_obs src/random_obs.cpp)
 target_link_libraries(random_obs ${catkin_LIBRARIES})
+add_dependencies(random_obs ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 add_executable(fixed_obs src/fixed_obs.cpp)
 target_link_libraries(fixed_obs ${catkin_LIBRARIES} ${PCL_LIBRARIES})

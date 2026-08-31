@@ -26,6 +26,7 @@
 #include "form_nav/kd_tree_map.h"
 #include "form_nav/GlobalTrajectory.h"
 #include "form_nav/PredictedTrajectory.h"
+#include "form_nav/DynamicObstacleTrajectory.h"
 
 // --- 基本配置 ---
 std::string UAV_NAME;
@@ -79,6 +80,21 @@ struct NeighborTrajectoryCache {
 };
 
 std::map<int, NeighborTrajectoryCache> neighbor_trajectories;
+
+// --- 动态障碍物轨迹（已知轨迹表） ---
+// 动态障碍物仅通过轨迹参与 MPC 避障惩罚；点云只用于可视化，不进入
+// 静态 KD-tree / A*。轨迹超时按该障碍物缺失处理，不阻塞控制。
+struct DynamicObstacleCache {
+    int shape = 0;          // 0=球体, 1=圆柱
+    double radius = 0.3;    // 障碍物半径 (m)
+    double height = 0.0;    // 圆柱高度 (m)，球体填 0
+    Eigen::MatrixXd predicted_states;
+    ros::Time prediction_start;
+    double dt = 0.0;
+};
+
+std::map<int, DynamicObstacleCache> dynamic_obstacles;
+const double DYNAMIC_OBSTACLE_TIMEOUT = 1.0;  // 障碍物轨迹超时 (s)
 
 // --- KD-tree 障碍物地图（第三步：静态避障） ---
 std::unique_ptr<KdTreeMap> kd_tree_ptr;
@@ -330,6 +346,119 @@ void neighborTrajectoryCallback(const form_nav::PredictedTrajectory::ConstPtr& m
     neighbor_trajectories[expected_id] = std::move(cache);
 }
 
+// ========== 动态障碍物轨迹回调 ==========
+// 轨迹为 world 系真值/预测（仿真阶段由 random_obs 用解析轨迹发布），
+// 校验后按 obstacle_id 存入动态障碍物表。
+void dynamicObstacleCallback(
+    const form_nav::DynamicObstacleTrajectory::ConstPtr& msg) {
+    if (msg->header.stamp.isZero() || msg->header.frame_id != WORLD_FRAME ||
+        msg->steps == 0 || !std::isfinite(msg->dt) || msg->dt <= 0.0 ||
+        msg->radius <= 0.0 ||
+        msg->states.size() != static_cast<size_t>(msg->steps) * 8 ||
+        (msg->shape != 0 && msg->shape != 1) ||
+        (msg->shape == 1 && (!std::isfinite(msg->height) || msg->height <= 0.0))) {
+        ROS_WARN_THROTTLE(2.0, "%s: invalid dynamic obstacle trajectory (id=%d)",
+                          UAV_NAME.c_str(), msg->obstacle_id);
+        return;
+    }
+
+    const double message_age = (ros::Time::now() - msg->header.stamp).toSec();
+    if (message_age > DYNAMIC_OBSTACLE_TIMEOUT ||
+        message_age < -NEIGHBOR_FUTURE_TOLERANCE) {
+        ROS_WARN_THROTTLE(2.0,
+                          "%s: rejected dynamic obstacle %d trajectory age %.3f s",
+                          UAV_NAME.c_str(), msg->obstacle_id, message_age);
+        return;
+    }
+
+    const auto existing = dynamic_obstacles.find(msg->obstacle_id);
+    if (existing != dynamic_obstacles.end() &&
+        msg->header.stamp <= existing->second.prediction_start) {
+        return;  // 乱序旧帧直接丢弃
+    }
+
+    if (!std::all_of(msg->states.begin(), msg->states.end(),
+                     [](double value) { return std::isfinite(value); })) {
+        ROS_WARN_THROTTLE(2.0,
+                          "%s: non-finite state in dynamic obstacle %d",
+                          UAV_NAME.c_str(), msg->obstacle_id);
+        return;
+    }
+
+    DynamicObstacleCache cache;
+    cache.shape = msg->shape;
+    cache.radius = msg->radius;
+    cache.height = msg->height;
+    cache.prediction_start = msg->header.stamp;
+    cache.dt = msg->dt;
+    cache.predicted_states.resize(8, msg->steps);
+    for (uint32_t i = 0; i < msg->steps; ++i) {
+        const size_t offset = static_cast<size_t>(i) * 8;
+        for (int row = 0; row < 8; ++row) {
+            cache.predicted_states(row, i) = msg->states[offset + row];
+        }
+    }
+    dynamic_obstacles[msg->obstacle_id] = std::move(cache);
+}
+
+double interpolateYaw(double from, double to, double ratio);
+
+// 把动态障碍物轨迹按求解时间网格对齐（与邻居轨迹相同的 age 采样/插值逻辑）。
+// 障碍物轨迹可选：缺失或超时的障碍物直接跳过，不阻塞控制。
+void buildAlignedDynamicObstacles(
+    const ros::Time& prediction_start,
+    std::vector<DynamicObstacleState>& out) {
+    out.clear();
+    for (const auto& entry : dynamic_obstacles) {
+        const int id = entry.first;
+        const DynamicObstacleCache& cache = entry.second;
+        const double age = (prediction_start - cache.prediction_start).toSec();
+        if (age > DYNAMIC_OBSTACLE_TIMEOUT ||
+            age < -NEIGHBOR_FUTURE_TOLERANCE) {
+            continue;
+        }
+
+        const int source_steps = static_cast<int>(cache.predicted_states.cols());
+        // 障碍物轨迹至少覆盖 MPC 视界（允许更长，末端保持）
+        if (source_steps < MPC_HORIZON + 1 || cache.dt <= 0.0) {
+            continue;
+        }
+
+        DynamicObstacleState obstacle;
+        obstacle.id = id;
+        obstacle.shape = cache.shape;
+        obstacle.radius = cache.radius;
+        obstacle.height = cache.height;
+        obstacle.predicted_states.resize(8, MPC_HORIZON + 1);
+        for (int step = 0; step <= MPC_HORIZON; ++step) {
+            const double query_offset = age + step * MPC_DT;
+            const double source_index = query_offset / cache.dt;
+
+            if (source_index <= 0.0) {
+                obstacle.predicted_states.col(step) =
+                    cache.predicted_states.col(0);
+                continue;
+            }
+            if (source_index >= source_steps - 1) {
+                obstacle.predicted_states.col(step) =
+                    cache.predicted_states.col(source_steps - 1);
+                continue;
+            }
+
+            const int lower = static_cast<int>(std::floor(source_index));
+            const int upper = lower + 1;
+            const double ratio = source_index - lower;
+            obstacle.predicted_states.col(step) =
+                (1.0 - ratio) * cache.predicted_states.col(lower) +
+                ratio * cache.predicted_states.col(upper);
+            obstacle.predicted_states(3, step) = interpolateYaw(
+                cache.predicted_states(3, lower),
+                cache.predicted_states(3, upper), ratio);
+        }
+        out.push_back(std::move(obstacle));
+    }
+}
+
 double interpolateYaw(double from, double to, double ratio) {
     const double delta = std::remainder(to - from, 2.0 * M_PI);
     return from + ratio * delta;
@@ -562,8 +691,12 @@ void controlLoop(const ros::TimerEvent&) {
         return;
     }
 
+    // 动态障碍物轨迹对齐（已知轨迹表，缺失/超时按无障碍物处理）
+    std::vector<DynamicObstacleState> dyn_obs_vec;
+    buildAlignedDynamicObstacles(solve_stamp, dyn_obs_vec);
+
     // 求解 MPC (t0 = 最近点时间)
-    bool ok = mpc_ptr->solve(s0, neighbors_vec, current_mpc_state);
+    bool ok = mpc_ptr->solve(s0, neighbors_vec, dyn_obs_vec, current_mpc_state);
     // 可视化
     if (ok) {
         auto u = mpc_ptr->getFirstU(); // 惯性系线速度指令 + yaw rate 指令
@@ -759,6 +892,9 @@ int main(int argc, char **argv) {
     double arrival_velocity          = nh_private.param<double>("mpc/arrival_velocity", 0.1);
     double w_u                       = nh_private.param<double>("mpc/w_u", 100.0);
     double w_du                      = nh_private.param<double>("mpc/w_du", 100.0);
+    double w_dyn                     = nh_private.param<double>("mpc/w_dyn", 300.0);
+    double d_safe_dyn                = nh_private.param<double>("mpc/d_safe_dyn", 0.2);
+    double d_act_dyn                 = nh_private.param<double>("mpc/d_act_dyn", 2.5);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
         throw std::runtime_error(
             "communication/neighbor_trajectory_timeout must be positive");
@@ -773,6 +909,16 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(w_u) || w_u < 0.0) {
         throw std::runtime_error("mpc/w_u must be non-negative");
+    }
+    if (!std::isfinite(w_dyn) || w_dyn < 0.0) {
+        throw std::runtime_error("mpc/w_dyn must be non-negative");
+    }
+    if (!std::isfinite(d_safe_dyn) || d_safe_dyn < 0.0) {
+        throw std::runtime_error("mpc/d_safe_dyn must be non-negative");
+    }
+    if (!std::isfinite(d_act_dyn) || d_act_dyn <= d_safe_dyn) {
+        throw std::runtime_error(
+            "mpc/d_act_dyn must be finite and greater than mpc/d_safe_dyn");
     }
     if (!std::isfinite(d_safe_ca) || d_safe_ca < 0.0) {
         throw std::runtime_error("mpc/d_safe_ca must be non-negative");
@@ -874,6 +1020,9 @@ int main(int argc, char **argv) {
     mpc_ptr->setMaxVelocity(u_max);
     mpc_ptr->setMaxAngularVelocity(w_max);
     mpc_ptr->setObstacleWeight(w_oa);
+    mpc_ptr->setDynamicObstacleWeight(w_dyn);
+    mpc_ptr->setDynamicObstacleSafeDistance(d_safe_dyn);
+    mpc_ptr->setDynamicObstacleActivationRange(d_act_dyn);
     mpc_ptr->setNearestObstacleNum(nearest_obs_num);
     mpc_ptr->setDroneRadius(drone_radius);
     mpc_ptr->setSafeDistance(safe_dist);
@@ -911,7 +1060,8 @@ int main(int argc, char **argv) {
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
              "lookahead=%.2f, yaw_lock_dist=%.2f, tau_v=%.2f, tau_w=%.2f, "
-             "arrival_dist=%.2f, arrival_vel=%.2f",
+             "arrival_dist=%.2f, arrival_vel=%.2f, "
+             "w_dyn=%.2f, d_safe_dyn=%.2f, d_act_dyn=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
              d_safe_ca, d_act_ca, w_ca, w_form, w_subgoal, w_yaw,
              nearest_obs_num, drone_radius, w_oa,
@@ -919,7 +1069,8 @@ int main(int argc, char **argv) {
              ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
              lookahead_distance, yaw_lock_dist, tau_v, tau_w,
-             ARRIVAL_DISTANCE, ARRIVAL_VELOCITY);
+             ARRIVAL_DISTANCE, ARRIVAL_VELOCITY,
+             w_dyn, d_safe_dyn, d_act_dyn);
 
     // 第三步：初始化 KD-tree 障碍物地图（静态避障）
     kd_tree_ptr.reset(new KdTreeMap());
@@ -950,6 +1101,11 @@ int main(int argc, char **argv) {
                 neighborTrajectoryCallback(message, nid);
             }));
     }
+
+    // 动态障碍物轨迹（已知轨迹表；topic 可在 launch 中手动 remap）
+    ros::Subscriber dyn_obs_sub =
+        nh.subscribe<form_nav::DynamicObstacleTrajectory>(
+            "/dynamic_obstacles/trajectory", 10, dynamicObstacleCallback);
 
     // --- 发布（setpoint、速度、共享预测状态、可视化） ---
     local_pos_pub = nh.advertise<geometry_msgs::PoseStamped>("/" + UAV_NAME + "/mavros/setpoint_position/local", 10);
