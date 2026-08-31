@@ -173,9 +173,9 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setYawTimeConstant(double tau) { tau_w_ = tau > 0.0 ? tau : 0.5; updateDiscreteModel(); }
     /// 设置 KD-tree 对数势垒避障权重
     void setObstacleWeight(double w) { Wo = w; }
-    /// 设置编队内硬安全距离 (m，中心距口径)
+    /// 设置编队内硬安全距离 (m)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
-    /// 设置编队避碰激活范围 (m，中心距口径，须大于 d_safe_ca)
+    /// 设置编队避碰激活范围 (m，大于 d_safe_ca)
     void setCollisionActivationRange(double d) { d_act_ca = d; }
     /// 设置相互碰撞惩罚权重
     void setCollisionWeight(double w) { Wc = w; }
@@ -188,7 +188,7 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 设置编队误差权重 (对角矩阵，独立于子目标惩罚权重)
     void setFormationErrorWeight(const DM& w) { Q_f_ = w; }
 
-    /// 设置障碍物 KD-tree（第三步：静态避障）
+    /// 设置障碍物 KD-tree
     void setKdTree(KdTreeMap* kd_tree) { kd_tree_ptr_ = kd_tree; }
     /// 设置每个预测步查询的最近障碍点数量 M
     void setNearestObstacleNum(int num) { nearest_obs_num_ = num; }

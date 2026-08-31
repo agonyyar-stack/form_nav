@@ -534,7 +534,7 @@ void controlLoop(const ros::TimerEvent&) {
         return;
     }
 
-    // 第三步：近距碰撞安全兜底 —— 当前点已进入临界距离时停止求解并悬停，
+    // 近距碰撞安全兜底 —— 当前点已进入临界距离时停止求解并悬停，
     // 避免在代价势垒梯度很大的区间内求解产生异常指令。
     if (kd_tree_ready) {
         const Eigen::Vector3d cur_pos(current_mpc_state(0),

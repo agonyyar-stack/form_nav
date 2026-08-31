@@ -518,13 +518,12 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
         // 对数势垒（中心距口径）：
         //   d >= d_act_ca 时惩罚严格为 0；d -> d_safe_ca+ 时惩罚 -> +∞。
         // 钳位 d >= d_safe_ca + eps 避免 log 参数非正，与障碍物项处理一致。
-        MX dist = MX::norm_2(pos_i - pos_j);
+        MX dist = MX::norm_2(pos_i - pos_j) - (2 * drone_radius_); // 有效间距
         MX d_c = MX::fmax(dist, d_safe_ca + 1e-2);
         MX h_ca = Wc * MX::fmax(
             0.0, -log((d_c - d_safe_ca) / (d_act_ca - d_safe_ca)));
         H_ca += h_ca;
     }
-
     return H_ca;
 }
 
