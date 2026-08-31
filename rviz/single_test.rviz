@@ -182,7 +182,7 @@ Visualization Manager:
       Radius: 0.029999999329447746
       Shaft Diameter: 0.10000000149011612
       Shaft Length: 0.10000000149011612
-      Topic: /astar/global_path
+      Topic: /uav0/astar/global_path
       Unreliable: false
       Value: true
     - Class: rviz/Group
@@ -709,7 +709,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 43.80897521972656
+      Distance: 39.009342193603516
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -717,17 +717,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -12.71202278137207
-        Y: 0.8132416009902954
-        Z: -8.473180770874023
+        X: -8.402913093566895
+        Y: -0.6742355823516846
+        Z: -8.923325538635254
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.3197965621948242
+      Pitch: 1.304796576499939
       Target Frame: <Fixed Frame>
-      Yaw: 4.688556671142578
+      Yaw: 4.773557662963867
     Saved: ~
 Window Geometry:
   Displays:

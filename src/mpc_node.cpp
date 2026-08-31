@@ -37,7 +37,7 @@ double MPC_DT = 0.05;
 double NEIGHBOR_TRAJECTORY_TIMEOUT = 0.3;
 double NEIGHBOR_FUTURE_TOLERANCE = 0.05;
 const double LOOP_RATE = 20.0;
-double a_brake_eff = 0.0;  // 制动加速度（与 MPC 内部一致，用于当前状态可行性预检）
+double tau_v_eff = 0.8;    // 线速度一阶时间常数（与 MPC 内部一致，用于制动可行性预检）
 double ARRIVAL_DISTANCE = 0.1;   // 到达锁定：到终点直线距离阈值 (m)
 double ARRIVAL_VELOCITY = 0.1;   // 到达锁定：3D 速度阈值 (m/s)
 
@@ -63,7 +63,7 @@ Eigen::VectorXd current_mpc_state = Eigen::VectorXd::Zero(8);
 bool has_odom = false;
 
 double vel_world_x = 0, vel_world_y = 0, vel_world_z = 0;
-double vel_body_w = 0;
+double vel_world_w = 0;    // 偏航角速率 (rad/s)
 
 // --- 历史轨迹 ---
 nav_msgs::Path traveled_path;  // 累积已走过的位置
@@ -233,7 +233,7 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
         vel_world_z = linear_world.z();
 
         // 3) 角速度：机体系 z 分量即偏航角速率（ENU 约定），无需 TF
-        vel_body_w = msg->twist.twist.angular.z;
+        vel_world_w = msg->twist.twist.angular.z;
 
         has_odom = true;
     } catch (const tf2::TransformException& error) {
@@ -306,17 +306,14 @@ void neighborTrajectoryCallback(const form_nav::PredictedTrajectory::ConstPtr& m
                 source_velocity, WORLD_FRAME, ros::Duration(0.05));
 
             const double yaw = tf2::getYaw(world_pose.pose.orientation);
-            const double cos_yaw = std::cos(yaw);
-            const double sin_yaw = std::sin(yaw);
             predicted_states(0, i) = world_pose.pose.position.x;
             predicted_states(1, i) = world_pose.pose.position.y;
             predicted_states(2, i) = world_pose.pose.position.z;
             predicted_states(3, i) = yaw;
-            // Shared velocities are world-frame; the MPC model uses body-frame velocities.
-            predicted_states(4, i) = cos_yaw * world_velocity.vector.x +
-                                     sin_yaw * world_velocity.vector.y;
-            predicted_states(5, i) = -sin_yaw * world_velocity.vector.x +
-                                     cos_yaw * world_velocity.vector.y;
+            // 共享轨迹速度约定为 header.frame_id（world）系；解耦模型下
+            // 线速度即惯性系独立状态，直接存储，无需再旋转到机体系。
+            predicted_states(4, i) = world_velocity.vector.x;
+            predicted_states(5, i) = world_velocity.vector.y;
             predicted_states(6, i) = world_velocity.vector.z;
             predicted_states(7, i) = msg->states[offset + 7];
         }
@@ -515,30 +512,29 @@ void controlLoop(const ros::TimerEvent&) {
         return;
     }
 
-    // World → Body 速度转换
-    double yaw = current_mpc_state(3);
-    double cos_psi = cos(yaw), sin_psi = sin(yaw);
-    current_mpc_state(4) =  cos_psi * vel_world_x + sin_psi * vel_world_y;
-    current_mpc_state(5) = -sin_psi * vel_world_x + cos_psi * vel_world_y;
+    // 解耦模型：线速度为惯性系独立状态，与 yaw 无关，直接填入世界系速度。
+    current_mpc_state(4) = vel_world_x;
+    current_mpc_state(5) = vel_world_y;
     current_mpc_state(6) = vel_world_z;
-    current_mpc_state(7) = vel_body_w;
+    current_mpc_state(7) = vel_world_w;
 
-    // 制动可行性预检：当前状态须满足 MPC 制动约束 ||v_world||^2 <= 2*a_brake*d_g，
-    // 否则 k=0 约束必然不可行，直接悬停（阈值与 MPC 内部 a_brake_eff 一致）。
+    // 制动可行性预检：当前状态须满足 MPC 精确停车约束 tau_v*||v|| <= d_g，
+    // 否则 k=0 约束必然不可行，直接悬停（阈值与 MPC 内部 tau_v_eff 一致）。
     const double cur_speed_sq = vel_world_x * vel_world_x +
                                 vel_world_y * vel_world_y +
                                 vel_world_z * vel_world_z;
-    if (cur_speed_sq > 2.0 * a_brake_eff * end_dist) {
+    const double cur_speed = std::sqrt(cur_speed_sq);
+    if (cur_speed * tau_v_eff > end_dist) {
         ROS_WARN_THROTTLE(0.5,
                           "%s: current speed exceeds braking feasibility "
                           "(v=%.2f m/s, d_g=%.2f m), holding.",
-                          UAV_NAME.c_str(), std::sqrt(cur_speed_sq), end_dist);
+                          UAV_NAME.c_str(), cur_speed, end_dist);
         publishHoldCommand();
         publishStationaryPrediction(solve_stamp);
         return;
     }
 
-    // 第三步：近距碰撞安全兜底 —— 当前点已进入临界距离时停止求解并悬停，
+    // 近距碰撞安全兜底 —— 当前点已进入临界距离时停止求解并悬停，
     // 避免在代价势垒梯度很大的区间内求解产生异常指令。
     if (kd_tree_ready) {
         const Eigen::Vector3d cur_pos(current_mpc_state(0),
@@ -570,21 +566,14 @@ void controlLoop(const ros::TimerEvent&) {
     bool ok = mpc_ptr->solve(s0, neighbors_vec, current_mpc_state);
     // 可视化
     if (ok) {
-        auto u = mpc_ptr->getFirstU(); // body
-        // body → world
-        double vx = cos_psi * u[0] - sin_psi * u[1];
-        double vy = sin_psi * u[0] + cos_psi * u[1];
-
-        const double vz = u[2];
-        const double vw = u[3];
-
+        auto u = mpc_ptr->getFirstU(); // 惯性系线速度指令 + yaw rate 指令
         geometry_msgs::TwistStamped cmd;
         cmd.header.stamp = ros::Time::now();
         cmd.header.frame_id = WORLD_FRAME;
-        cmd.twist.linear.x = vx;
-        cmd.twist.linear.y = vy;
-        cmd.twist.linear.z = vz;
-        cmd.twist.angular.z = vw;
+        cmd.twist.linear.x = u[0];
+        cmd.twist.linear.y = u[1];
+        cmd.twist.linear.z = u[2];
+        cmd.twist.angular.z = u[3];
         cmd_vel_pub.publish(cmd);
 
         std::vector<double> pred = mpc_ptr->getPredictX();
@@ -598,16 +587,10 @@ void controlLoop(const ros::TimerEvent&) {
         shared_msg.states.reserve(pred.size());
         for (uint32_t i = 0; i < shared_msg.steps; ++i) {
             const size_t offset = static_cast<size_t>(i) * 8;
-            const double predicted_yaw = pred[offset + 3];
-            const double predicted_cos = std::cos(predicted_yaw);
-            const double predicted_sin = std::sin(predicted_yaw);
-            const double predicted_vx_world = predicted_cos * pred[offset + 4] -
-                                              predicted_sin * pred[offset + 5];
-            const double predicted_vy_world = predicted_sin * pred[offset + 4] +
-                                              predicted_cos * pred[offset + 5];
+            // 解耦模型下预测速度已是世界系，直接按消息约定（world 系）发布
             shared_msg.states.insert(shared_msg.states.end(), {
-                pred[offset + 0], pred[offset + 1], pred[offset + 2], predicted_yaw,
-                predicted_vx_world, predicted_vy_world, pred[offset + 6], pred[offset + 7]});
+                pred[offset + 0], pred[offset + 1], pred[offset + 2], pred[offset + 3],
+                pred[offset + 4], pred[offset + 5], pred[offset + 6], pred[offset + 7]});
         }
         share_path_pub.publish(shared_msg);
 
@@ -751,6 +734,7 @@ int main(int argc, char **argv) {
     double w_ca      = nh_private.param<double>("mpc/w_ca", 200.0);
     double w_form    = nh_private.param<double>("mpc/w_form", 2000.0);
     double w_subgoal = nh_private.param<double>("mpc/w_subgoal", 20000.0);
+    double w_yaw     = nh_private.param<double>("mpc/w_yaw", 1000.0);
     int nearest_obs_num = nh_private.param<int>("mpc/nearest_obs_num", 3);
     double drone_radius = nh_private.param<double>("mpc/drone_radius", 0.35);
     double safe_dist    = nh_private.param<double>("mpc/safe_dist", 0.5);
@@ -768,7 +752,9 @@ int main(int argc, char **argv) {
     double neighbor_timeout          = nh_private.param<double>("communication/neighbor_trajectory_timeout", 0.3);
     double neighbor_future_tolerance = nh_private.param<double>("communication/neighbor_future_tolerance", 0.05);
     double lookahead_distance        = nh_private.param<double>("mpc/lookahead_distance", 2.0);
-    double brake_accel               = nh_private.param<double>("mpc/a_brake", 0.0);
+    double yaw_lock_dist             = nh_private.param<double>("mpc/yaw_lock_dist", 0.3);
+    double tau_v                     = nh_private.param<double>("mpc/tau_v", 0.8);
+    double tau_w                     = nh_private.param<double>("mpc/tau_w", 0.5);
     double arrival_distance          = nh_private.param<double>("mpc/arrival_distance", 0.1);
     double arrival_velocity          = nh_private.param<double>("mpc/arrival_velocity", 0.1);
     double w_u                       = nh_private.param<double>("mpc/w_u", 100.0);
@@ -804,8 +790,14 @@ int main(int argc, char **argv) {
     if (!std::isfinite(w_subgoal) || w_subgoal < 0.0) {
         throw std::runtime_error("mpc/w_subgoal must be non-negative");
     }
+    if (!std::isfinite(w_yaw) || w_yaw < 0.0) {
+        throw std::runtime_error("mpc/w_yaw must be non-negative");
+    }
     if (!std::isfinite(lookahead_distance) || lookahead_distance <= 0.0) {
         throw std::runtime_error("mpc/lookahead_distance must be positive");
+    }
+    if (!std::isfinite(yaw_lock_dist) || yaw_lock_dist < 0.0) {
+        throw std::runtime_error("mpc/yaw_lock_dist must be non-negative");
     }
     if (!std::isfinite(arrival_distance) || arrival_distance <= 0.0) {
         throw std::runtime_error("mpc/arrival_distance must be positive");
@@ -813,8 +805,11 @@ int main(int argc, char **argv) {
     if (!std::isfinite(arrival_velocity) || arrival_velocity <= 0.0) {
         throw std::runtime_error("mpc/arrival_velocity must be positive");
     }
-    if (!std::isfinite(brake_accel) || brake_accel < 0.0) {
-        throw std::runtime_error("mpc/a_brake must be non-negative");
+    if (!std::isfinite(tau_v) || tau_v <= 0.0) {
+        throw std::runtime_error("mpc/tau_v must be positive");
+    }
+    if (!std::isfinite(tau_w) || tau_w <= 0.0) {
+        throw std::runtime_error("mpc/tau_w must be positive");
     }
     if (nearest_obs_num <= 0) {
         throw std::runtime_error("mpc/nearest_obs_num must be positive");
@@ -890,35 +885,40 @@ int main(int argc, char **argv) {
     mpc_ptr->setCollisionActivationRange(d_act_ca);
     mpc_ptr->setCollisionWeight(w_ca);
     mpc_ptr->setLookaheadDistance(lookahead_distance);
-    mpc_ptr->setBrakeAcceleration(brake_accel);
-    a_brake_eff = brake_accel > 0.0 ? brake_accel : 0.8 * u_max;
+    mpc_ptr->setYawLockDistance(yaw_lock_dist);
+    mpc_ptr->setVelocityTimeConstant(tau_v);
+    mpc_ptr->setYawTimeConstant(tau_w);
+    tau_v_eff = tau_v;
     mpc_ptr->setControlInputWeight(
         DM::diag(DM{w_u, w_u, w_u, w_u}));
     mpc_ptr->setControlIncrementWeight(
         DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
     // 编队误差权重：独立于子目标惩罚权重（默认小一个数量级），
-    // 相对比例与 Q_ 保持一致（x:y:z:yaw = 1:1:0.5:0.005）。
+    // yaw 通道恒为 0 —— yaw 只跟踪各自速度/子目标方向，编队误差不再拉齐机头，
+    // 避免与 yaw 参考（子目标方向）打架。
     mpc_ptr->setFormationErrorWeight(
-        DM::diag(DM{w_form, w_form, w_form / 2.0, w_form / 200.0}));
-    // 滚动子目标惩罚权重（原 Q_）：相对比例与默认一致（x:y:z:yaw = 1:1:0.5:0.005）
+        DM::diag(DM{w_form, w_form, w_form / 2.0, 0.0}));
+    // 滚动子目标惩罚权重（原 Q_）：位置 x:y:z = 1:1:0.5；
+    // yaw 通道用独立参数 w_yaw（默认 1000，约为位置权重的 1/20），
+    // 复用现有终端软约束跟踪子目标方向，不新增代价项。
     mpc_ptr->setSubgoalWeight(
-        DM::diag(DM{w_subgoal, w_subgoal, w_subgoal / 2.0, w_subgoal / 200.0}));
+        DM::diag(DM{w_subgoal, w_subgoal, w_subgoal / 2.0, w_yaw}));
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
              "d_safe_ca=%.2f, d_act_ca=%.2f, w_ca=%.2f, "
-             "w_form=%.2f, w_subgoal=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
+             "w_form=%.2f, w_subgoal=%.2f, w_yaw=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
              "safe_dist=%.2f, detect_range=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
-             "lookahead=%.2f, a_brake=%.2f, "
+             "lookahead=%.2f, yaw_lock_dist=%.2f, tau_v=%.2f, tau_w=%.2f, "
              "arrival_dist=%.2f, arrival_vel=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_ca, d_act_ca, w_ca, w_form, w_subgoal,
+             d_safe_ca, d_act_ca, w_ca, w_form, w_subgoal, w_yaw,
              nearest_obs_num, drone_radius, w_oa,
              safe_dist, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
-             lookahead_distance, a_brake_eff,
+             lookahead_distance, yaw_lock_dist, tau_v, tau_w,
              ARRIVAL_DISTANCE, ARRIVAL_VELOCITY);
 
     // 第三步：初始化 KD-tree 障碍物地图（静态避障）

@@ -1,6 +1,6 @@
 <launch>
     <!-- random=随机障碍物, fixed=固定复杂场景 -->
-    <arg name="scene" default="fixed" />
+    <arg name="scene" default="random" />
     <!-- 全局层算法选择: kino_astar=kinodynamic A*, astar=纯 A* -->
     <arg name="global_planner" default="astar" />
 

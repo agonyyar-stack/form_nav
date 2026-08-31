@@ -42,21 +42,20 @@ private: //存储了 MPC 算法运行时的配置和状态
     double dt_;  //时间步长step
 
     //constrains
-    double u_max_, u_min_; //线加速度
-    double w_max_, w_min_; //角加速度
+    double u_max_, u_min_; //线速度指令上限 (m/s)
+    double w_max_, w_min_; //偏航角速度指令上限 (rad/s)
 
     //权重矩阵
     DM Q_, F_, R_d_;
     // 编队误差权重（与子目标惩罚权重 Q_ 独立，避免两者耦合打架）
     DM Q_f_;
 
-    //运动学方程参数
-    double Lx, Kx;
-    double Ly, Ky;
-    double Lz, Kz;
-    double Lw, Kw;
-    DM beta;
-    DM gama;
+    //运动学方程参数（yaw 与线速度解耦的一阶系统）：
+    //   v̇_e = (K_v v_c - v_e)/τ_v,  ψ̇ = ω,  ω̇ = (K_ω ω_c - ω)/τ_ω
+    double tau_v_;  // 线速度一阶时间常数 (s)
+    double tau_w_;  // 偏航角速度一阶时间常数 (s)
+    double K_v_;    // 线速度指令稳态增益（默认 1）
+    double K_w_;    // 偏航角速度指令稳态增益（默认 1，指令即真实 yaw rate）
 
     // 自身 ID
     int my_id_;
@@ -103,7 +102,10 @@ private: //存储了 MPC 算法运行时的配置和状态
     double built_dt_;
     double built_u_max_;
     double built_w_max_;
-    double built_a_brake_;
+    double built_tau_v_;
+    double built_tau_w_;
+    double built_K_v_;
+    double built_K_w_;
     size_t built_neighbor_count_;
     int built_nearest_obs_num_;
     double built_detect_range_;
@@ -119,7 +121,9 @@ private: //存储了 MPC 算法运行时的配置和状态
     DM k1; // ki,1
     DM k2; // ki,2
     
-    Function kinematic_equation_; //运动学方程
+    // 精确离散化系数（一阶系统 ZOH 解析解）：X_{k+1} = A_ X_k + B_ U_k
+    DM A_;
+    DM B_;
     //OptiSol solution_; 报错没有默认构造函数
     unique_ptr<casadi::OptiSol> solution_;  //获取计算出的最优状态和控制输入序列
     
@@ -133,14 +137,16 @@ private: //存储了 MPC 算法运行时的配置和状态
     // 滚动子目标：沿弧长前瞻选取，全局轨迹仅提供方向引导
     std::vector<double> path_arclength_;  // 与 global_traj_ 同步的累积弧长 (m)
     double lookahead_distance_;           // 子目标前瞻距离 (m)
-    double a_brake_;                      // 制动加速度 (m/s^2)，默认 0.8*u_max
     GlobalWaypoint rolling_goal_;         // 最近一次求解使用的子目标
+    double yaw_ref_;                      // yaw 参考（子目标方向，复用终端 Q_ 的 yaw 软约束）
+    double yaw_lock_dist_;                // 进入终点范围后冻结 yaw 参考的距离阈值 (m)
     bool has_rolling_goal_;
 public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     Mpc();
     ~Mpc();
- 
-    Function setKinematicEquation(); //设置运动学模型
+
+    /// 依据 dt_/τ/K 重建离散模型系数 A_、B_（配置变化时调用）
+    void updateDiscreteModel();
 
     /// 设置自身 ID
     void setMyId(int id) { my_id_ = id; }
@@ -151,20 +157,25 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 设置预测步长 (horizon)
     void setPredictionHorizon(int N) { N_ = N; }
     /// 设置时间步长 (s)
-    void setTimeStep(double dt) { dt_ = dt; }
-    /// 设置线速度/线加速度上限, 自动更新下限与默认制动加速度
-    void setMaxVelocity(double u_max) { u_max_ = u_max; u_min_ = -u_max; a_brake_ = 0.8 * u_max_; }
-    /// 设置角速度/角加速度上限, 自动更新下限
+    void setTimeStep(double dt) { dt_ = dt; updateDiscreteModel(); }
+    /// 设置线速度指令上限 (m/s)，自动更新下限
+    void setMaxVelocity(double u_max) { u_max_ = u_max; u_min_ = -u_max; }
+    /// 设置偏航角速度指令上限 (rad/s)，自动更新下限
     void setMaxAngularVelocity(double w_max) { w_max_ = w_max; w_min_ = -w_max; }
     /// 设置滚动子目标前瞻距离 (m)
     void setLookaheadDistance(double d) { lookahead_distance_ = d; }
-    /// 设置制动加速度 (m/s^2)，<=0 时取默认 0.8*u_max
-    void setBrakeAcceleration(double a) { a_brake_ = a > 0.0 ? a : 0.8 * u_max_; }
+    /// 设置终点 yaw 冻结距离 (m)：距全局终点小于该值时保持机头方向，
+    /// 不再随"指向子目标"的方位角转动（悬停漂移会让该方位角绕圈）
+    void setYawLockDistance(double d) { yaw_lock_dist_ = d; }
+    /// 设置线速度一阶时间常数 (s)，<=0 时恢复默认 0.8
+    void setVelocityTimeConstant(double tau) { tau_v_ = tau > 0.0 ? tau : 0.8; updateDiscreteModel(); }
+    /// 设置偏航角速度一阶时间常数 (s)，<=0 时恢复默认 0.5
+    void setYawTimeConstant(double tau) { tau_w_ = tau > 0.0 ? tau : 0.5; updateDiscreteModel(); }
     /// 设置 KD-tree 对数势垒避障权重
     void setObstacleWeight(double w) { Wo = w; }
-    /// 设置编队内硬安全距离 (m，中心距口径)
+    /// 设置编队内硬安全距离 (m)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
-    /// 设置编队避碰激活范围 (m，中心距口径，须大于 d_safe_ca)
+    /// 设置编队避碰激活范围 (m，大于 d_safe_ca)
     void setCollisionActivationRange(double d) { d_act_ca = d; }
     /// 设置相互碰撞惩罚权重
     void setCollisionWeight(double w) { Wc = w; }
@@ -177,7 +188,7 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 设置编队误差权重 (对角矩阵，独立于子目标惩罚权重)
     void setFormationErrorWeight(const DM& w) { Q_f_ = w; }
 
-    /// 设置障碍物 KD-tree（第三步：静态避障）
+    /// 设置障碍物 KD-tree
     void setKdTree(KdTreeMap* kd_tree) { kd_tree_ptr_ = kd_tree; }
     /// 设置每个预测步查询的最近障碍点数量 M
     void setNearestObstacleNum(int num) { nearest_obs_num_ = num; }
