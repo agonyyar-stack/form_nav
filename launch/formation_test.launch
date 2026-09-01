@@ -53,7 +53,7 @@
   </group>
 
   <group if="$(eval arg('scene') == 1)">
-    <include file="$(find form_nav)/launch/fixed_obs.launch">
+    <include file="$(find form_nav)/launch/obs_generator.launch">
       <arg name="rviz" value="false" />
     </include>
   </group>

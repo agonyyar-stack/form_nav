@@ -61,6 +61,7 @@
   <depend>mavros_msgs</depend>
   <depend>eigen</depend>
   <depend>pcl_ros</depend>
+  <depend>yaml-cpp</depend>
   <depend>pcl_conversions</depend>
   <depend>cv_bridge</depend>
   <depend>message_filters</depend>

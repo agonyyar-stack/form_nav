@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!-- 场景生成节点（静态 + 动态障碍物），配置由 YAML 场景文件驱动 -->
+<!-- 单独查看场景: roslaunch form_nav obs_generator.launch rviz:=true -->
+<launch>
+  <arg name="scene_file"
+       default="$(find form_nav)/config/scenes/fixed_scene.yaml" />
+  <arg name="pub_rate" default="10.0" />  <!-- 发布频率 (Hz) -->
+  <arg name="dyn_obs_num" default="-1" /> <!-- -1=全部, 0=关闭, n>0=只取前 n 个 -->
+  <arg name="rviz" default="false" />
+
+  <node pkg="form_nav" type="obs_generator" name="obs_generator"
+        output="screen">
+    <param name="scene_file" value="$(arg scene_file)" />
+    <param name="pub_rate" value="$(arg pub_rate)" />
+    <param name="dyn_obs/num" value="$(arg dyn_obs_num)" />
+    <param name="dyn_obs/traj_dt" value="0.05" />  <!-- 对齐 MPC dt -->
+    <param name="dyn_obs/traj_steps" value="21" /> <!-- N+1，与 MPC N=20 对齐 -->
+  </node>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz" />
+</launch>
