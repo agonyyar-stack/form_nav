@@ -35,7 +35,7 @@
         <param name="mpc/yaw_lock_dist" value="0.3" />   <!-- 进入终点范围后冻结 yaw 参考的距离 (m) -->
 
         <param name="mpc/w_oa" value="20.0" />             <!-- 静态避障权重 -->
-        <param name="mpc/w_dyn" value="100.0" />            <!-- 动态避障权重 -->
+        <param name="mpc/w_dyn" value="50.0" />            <!-- 动态避障权重 -->
         <param name="mpc/d_safe_dyn" value="0.2" />         <!-- 动态障碍物最小安全距离 (m，表面口径) -->
         <param name="mpc/d_act_dyn" value="2.0" />          <!-- 动态障碍物激活范围 (m)，须大于 d_safe_dyn -->
         <param name="mpc/nearest_obs_num" value="3" />    <!-- 每步查询最近障碍点数量 -->

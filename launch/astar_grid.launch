@@ -52,7 +52,7 @@
     <!-- astar 参数 -->
     <param name="astar/resolution" value="0.1" /> <!-- 栅格分辨率 (m) -->
     <param name="astar/lambda_heu" value="1.0" /> <!-- 启发式权重系数 -->
-    <param name="astar/allocated_node_num" value="500000" /> <!-- 最大允许分配的节点数 -->
+    <param name="astar/allocated_node_num" value="300000" /> <!-- 最大允许分配的节点数 -->
     <param name="astar/goal_tolerance" value="0.2" /> <!-- 终点容差 (m) -->
     <param name="astar/enable_shortcut" value="true" /> <!-- 启用贪心去锯齿（可关闭做 A/B 对比） -->
 
