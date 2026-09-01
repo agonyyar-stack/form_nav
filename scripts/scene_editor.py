@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsLineItem,
@@ -288,6 +289,7 @@ COLOR_STATIC = QColor(80, 160, 220)
 COLOR_DYN = QColor(240, 150, 60)
 COLOR_COLLIDE = QColor(220, 40, 40)
 COLOR_SWEEP = QColor(240, 150, 60, 90)
+HANDLE_SIZE = 10.0  # 缩放手柄屏幕像素尺寸
 
 
 class SceneCanvas(QGraphicsView):
@@ -298,11 +300,18 @@ class SceneCanvas(QGraphicsView):
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
         self.setRenderHint(QPainter.Antialiasing)
-        self.setDragMode(QGraphicsView.RubberBandDrag)
+        self.setDragMode(QGraphicsView.NoDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
         self.items_by_key = {}
-        self._dragging = False
+        # 鼠标编辑状态
+        self._edit_mode = None  # None | "move" | "resize"
+        self._edit_key = None
+        self._start_cursor_world = (0.0, 0.0)
+        self._start_center = (0.0, 0.0)
+        self._resize_corner = 0
+        self._resize_anchor = (0.0, 0.0)
+        self._resize_center = (0.0, 0.0)
 
     # ---- 坐标映射（Qt y 向下，世界 y 向上）----
     def world_to_scene(self, x, y):
@@ -310,6 +319,9 @@ class SceneCanvas(QGraphicsView):
 
     def scene_to_world(self, p):
         return (p.x(), -p.y())
+
+    def _to_world(self, viewport_pos):
+        return self.scene_to_world(self.mapToScene(viewport_pos))
 
     def fit_scene(self):
         sc = self.app.model.scene
@@ -388,7 +400,7 @@ class SceneCanvas(QGraphicsView):
                                                s.y - s.ly / 2.0)))
             item.setPen(pen)
             item.setBrush(brush)
-            item.setFlag(QGraphicsItem.ItemIsMovable, True)
+            item.setFlag(QGraphicsItem.ItemIsSelectable, True)
             item.setData(0, key)
             self._scene.addItem(item)
             self.items_by_key[key] = item
@@ -400,6 +412,8 @@ class SceneCanvas(QGraphicsView):
             self._place_label(label, s.x, s.y)
             label.setData(0, key)
             self._scene.addItem(label)
+            if self.app.selected_key == key:
+                self._add_handles(key)
 
         t = self.app.time
         for d in self.app.model.dynamics:
@@ -428,7 +442,7 @@ class SceneCanvas(QGraphicsView):
             pen_dyn.setCosmetic(True)
             item.setPen(pen_dyn)
             item.setBrush(QBrush(color.lighter(160)))
-            item.setFlag(QGraphicsItem.ItemIsMovable, True)
+            item.setFlag(QGraphicsItem.ItemIsSelectable, True)
             item.setData(0, key)
             self._scene.addItem(item)
             self.items_by_key[key] = item
@@ -438,6 +452,8 @@ class SceneCanvas(QGraphicsView):
             self._place_label(label, px, py)
             label.setData(0, key)
             self._scene.addItem(label)
+            if self.app.selected_key == key:
+                self._add_handles(key)
 
     def _place_label(self, label, wx, wy):
         """把恒定像素大小的标签放在世界坐标 (wx, wy) 中心"""
@@ -448,27 +464,200 @@ class SceneCanvas(QGraphicsView):
                      QPointF(br.width() / (2.0 * scale),
                              br.height() / (2.0 * scale)))
 
-    # ---- 交互 ----
+    # ---- 选中障碍物的几何辅助 ----
+    def _display_center(self, key):
+        """障碍物在世界系中的显示中心（动态障碍物取当前时刻位置）"""
+        kind, oid = key
+        if kind == "static":
+            s = self.app.find_static(oid)
+            return (s.x, s.y)
+        d = self.app.find_dynamic(oid)
+        return d.position(self.app.time)
+
+    def _shape_half_extents(self, key):
+        """返回 (hx, hy)：矩形半长宽 / 圆形半径"""
+        kind, oid = key
+        if kind == "static":
+            s = self.app.find_static(oid)
+            if s.shape == "cylinder":
+                return (s.radius, s.radius)
+            return (s.lx / 2.0, s.ly / 2.0)
+        d = self.app.find_dynamic(oid)
+        return (d.radius, d.radius)
+
+    def _corner_world(self, key, corner):
+        """矩形/圆形外接矩形 4 角世界坐标；corner: 0=TL,1=TR,2=BL,3=BR"""
+        cx, cy = self._display_center(key)
+        hx, hy = self._shape_half_extents(key)
+        corners = [(cx - hx, cy + hy), (cx + hx, cy + hy),
+                   (cx - hx, cy - hy), (cx + hx, cy - hy)]
+        return corners[corner]
+
+    def _add_handles(self, key):
+        """在选中障碍物外接矩形的 4 角画缩放手柄（恒定像素大小）"""
+        pen = QPen(QColor(20, 20, 20), 1)
+        pen.setCosmetic(True)
+        brush = QBrush(QColor(255, 255, 255))
+        for corner in range(4):
+            wx, wy = self._corner_world(key, corner)
+            handle = QGraphicsRectItem(-HANDLE_SIZE / 2.0, -HANDLE_SIZE / 2.0,
+                                       HANDLE_SIZE, HANDLE_SIZE)
+            handle.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+            handle.setPen(pen)
+            handle.setBrush(brush)
+            handle.setPos(self.world_to_scene(wx, wy))
+            handle.setData(0, ("handle", key, corner))
+            handle.setZValue(20)
+            self._scene.addItem(handle)
+
+    # ---- 鼠标编辑：拖动移动 / 顶角缩放 ----
+    def _pick(self, event):
+        """几何拾取：优先手柄，其次障碍物本体（后绘制者在上）。
+        返回 ("handle", key, corner) / key / None。
+        不用 itemAt：cosmetic 笔宽会让线段命中区被放大数米。"""
+        wx, wy = self._to_world(event.pos())
+        scale = max(abs(self.transform().m11()), 1e-6)
+        if self.app.selected_key is not None:
+            key = self.app.selected_key
+            thr = (HANDLE_SIZE / 2.0 + 2.0) / scale
+            for corner in range(4):
+                hx, hy = self._corner_world(key, corner)
+                if math.hypot(wx - hx, wy - hy) <= thr:
+                    return ("handle", key, corner)
+        hit = None
+        for s in self.app.model.statics:
+            key = ("static", s.oid)
+            if s.shape == "cylinder":
+                inside = math.hypot(wx - s.x, wy - s.y) <= s.radius
+            else:
+                inside = (abs(wx - s.x) <= s.lx / 2.0 and
+                          abs(wy - s.y) <= s.ly / 2.0)
+            if inside:
+                hit = key
+        for d in self.app.model.dynamics:
+            key = ("dynamic", d.oid)
+            px, py = d.position(self.app.time)
+            if math.hypot(wx - px, wy - py) <= d.radius:
+                hit = key
+        return hit
+
     def mousePressEvent(self, event):
-        item = self.itemAt(event.pos())
-        if item is None or item.data(0) is None:
-            self._scene.clearSelection()
+        if event.button() == Qt.LeftButton:
+            pick = self._pick(event)
+            if pick is not None and pick[0] == "handle":
+                _, key, corner = pick
+                self.app.selected_key = key
+                self.app.panel.refresh()
+                self.refresh()
+                self._edit_mode = "resize"
+                self._edit_key = key
+                self._resize_corner = corner
+                self._start_cursor_world = self._to_world(event.pos())
+                self._store_resize_origin(key, corner)
+                event.accept()
+                return
+            if pick is not None:
+                key = pick
+                self.app.selected_key = key
+                self.app.panel.refresh()
+                self.refresh()
+                self._edit_mode = "move"
+                self._edit_key = key
+                self._start_cursor_world = self._to_world(event.pos())
+                kind, oid = key
+                if kind == "static":
+                    s = self.app.find_static(oid)
+                    self._start_center = (s.x, s.y)
+                else:
+                    d = self.app.find_dynamic(oid)
+                    self._start_center = (d.cx, d.cy)
+                event.accept()
+                return
+            # 空白处点击：取消选择
+            if self.app.selected_key is not None:
+                self.app.selected_key = None
+                self.app.panel.refresh()
+                self.refresh()
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._edit_mode == "move" and event.buttons() & Qt.LeftButton:
+            wx, wy = self._to_world(event.pos())
+            dx = wx - self._start_cursor_world[0]
+            dy = wy - self._start_cursor_world[1]
+            self.app.on_obstacle_moved(
+                self._edit_key, self._start_center[0] + dx,
+                self._start_center[1] + dy)
+            self.refresh()
+            event.accept()
+            return
+        if self._edit_mode == "resize" and event.buttons() & Qt.LeftButton:
+            wx, wy = self._to_world(event.pos())
+            self._apply_resize(wx, wy)
+            self.refresh()
+            event.accept()
+            return
+        # 悬停光标提示（几何拾取）
+        pick = self._pick(event)
+        if pick is not None and pick[0] == "handle":
+            self.setCursor(Qt.SizeFDiagCursor)
+        elif pick is not None:
+            self.setCursor(Qt.SizeAllCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
-        for item in self._scene.selectedItems():
-            key = item.data(0)
-            if key is None:
-                continue
-            x, y = self.scene_to_world(item.pos())
-            self.app.on_obstacle_moved(key, x, y)
+        if self._edit_mode is not None:
+            self._edit_mode = None
+            self.app.refresh_all()
 
-    def mouseDoubleClickEvent(self, event):
-        super().mouseDoubleClickEvent(event)
-        item = self.itemAt(event.pos())
-        if item is not None and item.data(0) is not None:
-            self.app.select_key(item.data(0))
+    def _store_resize_origin(self, key, corner):
+        """记录缩放基准：矩形用对侧角锚点，圆形用圆心"""
+        kind, oid = key
+        if kind == "static":
+            s = self.app.find_static(oid)
+            if s.shape == "cylinder":
+                self._resize_center = (s.x, s.y)
+            else:
+                hx, hy = s.lx / 2.0, s.ly / 2.0
+                opposite = {0: 3, 1: 2, 2: 1, 3: 0}
+                self._resize_anchor = self._corner_world(
+                    key, opposite[corner])
+                self._resize_center = (s.x, s.y)
+        else:
+            d = self.app.find_dynamic(oid)
+            self._resize_center = d.position(self.app.time)
+
+    def _apply_resize(self, wx, wy):
+        """根据鼠标世界坐标更新选中障碍物的 xy 尺寸"""
+        kind, oid = self._edit_key
+        if kind == "static":
+            s = self.app.find_static(oid)
+            if s.shape == "cylinder":
+                r = math.hypot(wx - self._resize_center[0],
+                               wy - self._resize_center[1]) / math.sqrt(2.0)
+                s.radius = max(0.1, r)
+                self.app.panel.set_field("radius", s.radius)
+            else:
+                ax, ay = self._resize_anchor
+                s.lx = max(0.2, abs(wx - ax))
+                s.ly = max(0.2, abs(wy - ay))
+                s.x = (ax + wx) / 2.0
+                s.y = (ay + wy) / 2.0
+                self.app.panel.set_field("lx", s.lx)
+                self.app.panel.set_field("ly", s.ly)
+                self.app.panel.set_field("x", s.x)
+                self.app.panel.set_field("y", s.y)
+        else:
+            d = self.app.find_dynamic(oid)
+            r = math.hypot(wx - self._resize_center[0],
+                           wy - self._resize_center[1]) / math.sqrt(2.0)
+            d.radius = max(0.1, r)
+            self.app.panel.set_field("radius", d.radius)
+        self.app.refresh_list()
+        self.app.update_collisions()
 
 
 # ============================== 属性面板 ==============================
@@ -592,6 +781,7 @@ class MainWindow(QMainWindow):
         rl.addWidget(QLabel("障碍物列表"))
         rl.addWidget(self.list_widget)
         rl.addWidget(self.panel)
+        rl.addWidget(self._build_edit_buttons())
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.canvas)
@@ -619,7 +809,11 @@ class MainWindow(QMainWindow):
         bl.addWidget(self.count_label)
         self.statusBar().addWidget(bottom)
 
-        self._build_toolbar()
+        # 快捷键：Ctrl+0 适应视图
+        fit_act = QAction("适应视图", self)
+        fit_act.setShortcut("Ctrl+0")
+        fit_act.triggered.connect(self.reset_view)
+        self.addAction(fit_act)
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self.on_tick)
         self._anim_timer.start(30)
@@ -633,31 +827,29 @@ class MainWindow(QMainWindow):
 
         self.refresh_all()
 
-    # ---- 工具栏 ----
-    def _build_toolbar(self):
-        tb = self.addToolBar("编辑")
-        tb.setMovable(False)
-        acts = [
-            ("新建", self.new_scene), ("打开...", self.open_scene),
-            ("保存", self.save_scene), ("另存为...", self.save_scene_as),
-            (None, None),
+    # ---- 编辑按钮（右侧属性面板下方）----
+    def _build_edit_buttons(self):
+        box = QWidget()
+        lay = QGridLayout(box)
+        lay.setContentsMargins(0, 6, 0, 0)
+        buttons = [
+            ("新建", self.new_scene),
+            ("打开...", self.open_scene),
+            ("保存", self.save_scene),
+            ("另存为...", self.save_scene_as),
             ("+静态立方体", lambda: self.add_obstacle("static", "cuboid")),
             ("+静态圆柱", lambda: self.add_obstacle("static", "cylinder")),
             ("+动态圆柱", lambda: self.add_obstacle("dynamic", "cylinder")),
             ("+动态球体", lambda: self.add_obstacle("dynamic", "sphere")),
-            (None, None),
-            ("删除", self.delete_selected), ("复制", self.duplicate_selected),
+            ("删除", self.delete_selected),
+            ("复制", self.duplicate_selected),
             ("适应视图 (Ctrl+0)", self.reset_view),
         ]
-        for text, fn in acts:
-            if text is None:
-                tb.addSeparator()
-                continue
-            act = QAction(text, self)
-            if "Ctrl+0" in text:
-                act.setShortcut("Ctrl+0")
-            act.triggered.connect(fn)
-            tb.addAction(act)
+        for i, (text, fn) in enumerate(buttons):
+            btn = QPushButton(text)
+            btn.clicked.connect(fn)
+            lay.addWidget(btn, i // 2, i % 2)
+        return box
 
     def reset_view(self):
         """恢复自动适配并重新铺满视口"""
