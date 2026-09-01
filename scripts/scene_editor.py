@@ -199,7 +199,7 @@ class SceneModel:
         self.frame_id = "world"
         self.scene = {
             "left_x": -20.0, "center_y": 0.0, "size_x": 20.0,
-            "size_y": 20.0, "size_z": 3.0, "resolution": 0.2,
+            "size_y": 20.0, "size_z": 3.0, "resolution": 0.1,
         }
         self.statics = []
         self.dynamics = []
@@ -1160,6 +1160,8 @@ class MainWindow(QMainWindow):
         return msg
 
     def _voxelize_static(self, s):
+        """静态障碍物表面点云（侧面 + 顶面 + 底边一圈，内部挖空），
+        与 obs_generator 节点保持一致的表面层生成逻辑。"""
         res = self.model.scene["resolution"]
         pts = []
         if s.shape == "cylinder":
@@ -1168,24 +1170,42 @@ class MainWindow(QMainWindow):
             iy0 = int(math.floor((s.y - s.radius) / res))
             iy1 = int(math.ceil((s.y + s.radius) / res))
             iz1 = int(math.ceil(s.h / res))
+
+            def inside(ix, iy, iz):
+                if iz < 0 or iz >= iz1:
+                    return False
+                dx = (ix + 0.5) * res - s.x
+                dy = (iy + 0.5) * res - s.y
+                return dx * dx + dy * dy <= s.radius ** 2
+
             for ix in range(ix0, ix1):
                 for iy in range(iy0, iy1):
-                    x = (ix + 0.5) * res
-                    y = (iy + 0.5) * res
-                    if (x - s.x) ** 2 + (y - s.y) ** 2 > s.radius ** 2:
-                        continue
                     for iz in range(iz1):
-                        pts.append((x, y, (iz + 0.5) * res))
+                        if not inside(ix, iy, iz):
+                            continue
+                        if (not inside(ix - 1, iy, iz) or
+                                not inside(ix + 1, iy, iz) or
+                                not inside(ix, iy - 1, iz) or
+                                not inside(ix, iy + 1, iz) or
+                                not inside(ix, iy, iz + 1)):
+                            pts.append(((ix + 0.5) * res,
+                                        (iy + 0.5) * res,
+                                        (iz + 0.5) * res))
         else:
             x0, x1 = s.x - s.lx / 2.0, s.x + s.lx / 2.0
             y0, y1 = s.y - s.ly / 2.0, s.y + s.ly / 2.0
-            for ix in range(int(math.floor(x0 / res)),
-                            int(math.ceil(x1 / res))):
-                for iy in range(int(math.floor(y0 / res)),
-                                int(math.ceil(y1 / res))):
-                    for iz in range(int(math.ceil(s.h / res))):
-                        pts.append(((ix + 0.5) * res, (iy + 0.5) * res,
-                                    (iz + 0.5) * res))
+            ix0, ix1 = int(math.floor(x0 / res)), int(math.ceil(x1 / res))
+            iy0, iy1 = int(math.floor(y0 / res)), int(math.ceil(y1 / res))
+            iz1 = int(math.ceil(s.h / res))
+            for ix in range(ix0, ix1):
+                for iy in range(iy0, iy1):
+                    for iz in range(iz1):
+                        if (ix == ix0 or ix == ix1 - 1 or
+                                iy == iy0 or iy == iy1 - 1 or
+                                iz == iz1 - 1):
+                            pts.append(((ix + 0.5) * res,
+                                        (iy + 0.5) * res,
+                                        (iz + 0.5) * res))
         return pts
 
     def _dyn_surface_points(self, d, px, py, res):

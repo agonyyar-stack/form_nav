@@ -4,7 +4,7 @@
 // 由 scene_editor.py（可视化编辑器）生成/编辑 YAML 场景文件，本节点在仿真
 // 启动时加载并发布：
 //   /map_generator/global_cloud、/map_generator/local_cloud —— 静态障碍物
-//     （cuboid/cylinder 体素化点云，A*/静态 KD-tree 使用）
+//     （cuboid/cylinder 表面层点云，模拟真实感知，A*/静态 KD-tree 使用）
 //   /map_generator/dynamic_cloud —— 动态障碍物点云（仅可视化，不进规划）
 //   /dynamic_obstacles/trajectory —— 动态障碍物预测轨迹（MPC 动态避障输入）
 //
@@ -40,7 +40,7 @@ double scene_center_y_ = 0.0;
 double scene_size_x_ = 20.0;
 double scene_size_y_ = 20.0;
 double scene_size_z_ = 3.0;
-double resolution_ = 0.2;
+double resolution_ = 0.1;
 double pub_rate_ = 10.0;
 std::string frame_id_ = "world";
 std::string scene_file_;
@@ -194,11 +194,15 @@ static bool loadScene(const std::string& path)
   }
 }
 
-// ============ 静态障碍物体素化 ============
-// 按全局栅格（分辨率 resolution_）把长方体体素化后加入点云
-static void addBoxToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
-                          double x0, double x1, double y0, double y1,
-                          double z0, double z1)
+// ============ 静态障碍物表面点云 ============
+// 只生成障碍物外表面一层点云（模拟真实感知：实际传感器只能看到表面，
+// 看不到内部）。规则：保留 x/y 方向存在出界邻域单元（侧面/棱）或上方
+// 出界（顶面）的单元；底面（贴地不可见）只保留周边一圈，内部挖空。
+
+// 长方体表面（x0..x1, y0..y1, z0..z1）
+static void addBoxSurfaceToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
+                                 double x0, double x1, double y0, double y1,
+                                 double z0, double z1)
 {
   const int ix0 = static_cast<int>(std::floor(x0 / resolution_));
   const int ix1 = static_cast<int>(std::ceil(x1 / resolution_));
@@ -211,6 +215,13 @@ static void addBoxToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
     for (int iy = iy0; iy < iy1; ++iy)
       for (int iz = iz0; iz < iz1; ++iz)
       {
+        // 侧面/顶面/底边：x 或 y 在边界层，或位于顶面层
+        const bool surface =
+            (ix == ix0 || ix == ix1 - 1 ||
+             iy == iy0 || iy == iy1 - 1 ||
+             iz == iz1 - 1);
+        if (!surface)
+          continue;
         pcl::PointXYZ p;
         p.x = (ix + 0.5) * resolution_;
         p.y = (iy + 0.5) * resolution_;
@@ -219,9 +230,9 @@ static void addBoxToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
       }
 }
 
-// 把实心圆柱（底面贴地、半径 r、高 h）体素化后加入点云
-static void addSolidCylinderToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
-                                    double cx, double cy, double r, double h)
+// 圆柱表面（底面贴地、半径 r、高 h）：侧面 + 顶面 + 底边一圈
+static void addCylinderSurfaceToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
+                                      double cx, double cy, double r, double h)
 {
   const int ix0 = static_cast<int>(std::floor((cx - r) / resolution_));
   const int ix1 = static_cast<int>(std::ceil((cx + r) / resolution_));
@@ -230,24 +241,34 @@ static void addSolidCylinderToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
   const int iz0 = 0;
   const int iz1 = static_cast<int>(std::ceil(h / resolution_));
 
+  auto inside = [&](int ix, int iy, int iz) {
+    if (iz < iz0 || iz >= iz1)
+      return false;
+    const double x = (ix + 0.5) * resolution_;
+    const double y = (iy + 0.5) * resolution_;
+    const double dx = x - cx;
+    const double dy = y - cy;
+    return dx * dx + dy * dy <= r * r;
+  };
+
   for (int ix = ix0; ix < ix1; ++ix)
     for (int iy = iy0; iy < iy1; ++iy)
-    {
-      const double x = (ix + 0.5) * resolution_;
-      const double y = (iy + 0.5) * resolution_;
-      const double dx = x - cx;
-      const double dy = y - cy;
-      if (dx * dx + dy * dy > r * r)
-        continue;
       for (int iz = iz0; iz < iz1; ++iz)
       {
+        if (!inside(ix, iy, iz))
+          continue;
+        const bool surface =
+            !inside(ix - 1, iy, iz) || !inside(ix + 1, iy, iz) ||
+            !inside(ix, iy - 1, iz) || !inside(ix, iy + 1, iz) ||
+            !inside(ix, iy, iz + 1);
+        if (!surface)
+          continue;
         pcl::PointXYZ p;
-        p.x = x;
-        p.y = y;
+        p.x = (ix + 0.5) * resolution_;
+        p.y = (iy + 0.5) * resolution_;
         p.z = (iz + 0.5) * resolution_;
         cloud.points.push_back(p);
       }
-    }
 }
 
 // 构建静态障碍物点云
@@ -256,10 +277,12 @@ static void buildStaticCloud(pcl::PointCloud<pcl::PointXYZ>& cloud)
   for (const auto& obs : static_obstacles_)
   {
     if (obs.shape == 1)
-      addSolidCylinderToCloud(cloud, obs.x, obs.y, obs.radius, obs.h);
+      addCylinderSurfaceToCloud(cloud, obs.x, obs.y, obs.radius, obs.h);
     else
-      addBoxToCloud(cloud, obs.x - obs.lx / 2.0, obs.x + obs.lx / 2.0,
-                    obs.y - obs.ly / 2.0, obs.y + obs.ly / 2.0, 0.0, obs.h);
+      addBoxSurfaceToCloud(cloud, obs.x - obs.lx / 2.0,
+                           obs.x + obs.lx / 2.0,
+                           obs.y - obs.ly / 2.0,
+                           obs.y + obs.ly / 2.0, 0.0, obs.h);
   }
 }
 // ======================================
