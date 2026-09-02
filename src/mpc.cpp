@@ -551,6 +551,28 @@ MX Mpc::dynamicObstacleAvoidance(MX current_states, int k_step) {
     return H_dyn;
 }
 
+MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& neighbor_params, MX current_states){
+    MX pos_i = current_states(Slice(0, 3));
+    MX H_ca = 0.0;
+
+    for (auto const& [j_id, j_param] : neighbor_params) {
+        // a_ij = 1（因为仅遍历邻居）
+        MX y_j = j_param(Slice(0, 4), k_step);
+        MX pos_j = y_j(Slice(0, 3));
+
+        // 对数势垒（中心距口径）：
+        //   d >= d_act_ca 时惩罚严格为 0；d -> d_safe_ca+ 时惩罚 -> +∞。
+        // 钳位 d >= d_safe_ca + eps 避免 log 参数非正，与障碍物项处理一致。
+        MX dist = MX::norm_2(pos_i - pos_j) - (2 * drone_radius_); // 有效间距
+        MX d_c = MX::fmax(dist, d_safe_ca + 1e-15);
+        // MX h_ca = Wc * MX::fmax(
+        //     0.0, -log((d_c - d_safe_ca) / (d_act_ca - d_safe_ca)));
+        MX h_ca = Wc * log(1 + (d_act_ca - d_safe_ca) / (d_c - d_safe_ca));
+        H_ca += h_ca;
+    }
+    return H_ca;
+}
+
 std::vector<double> Mpc::queryObstacleValues(const std::vector<Eigen::Vector3d>& query_pts, std::vector<int>& out_indices) {
     const int steps = static_cast<int>(query_pts.size());
     const int total = nearest_obs_num_ * steps;
@@ -666,27 +688,6 @@ std::vector<double> Mpc::queryDynamicObstacleSegments(
         }
     }
     return values;
-}
-
-MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& neighbor_params, MX current_states){
-    MX pos_i = current_states(Slice(0, 3));
-    MX H_ca = 0.0;
-
-    for (auto const& [j_id, j_param] : neighbor_params) {
-        // a_ij = 1（因为仅遍历邻居）
-        MX y_j = j_param(Slice(0, 4), k_step);
-        MX pos_j = y_j(Slice(0, 3));
-
-        // 对数势垒（中心距口径）：
-        //   d >= d_act_ca 时惩罚严格为 0；d -> d_safe_ca+ 时惩罚 -> +∞。
-        // 钳位 d >= d_safe_ca + eps 避免 log 参数非正，与障碍物项处理一致。
-        MX dist = MX::norm_2(pos_i - pos_j) - (2 * drone_radius_); // 有效间距
-        MX d_c = MX::fmax(dist, d_safe_ca + 1e-2);
-        MX h_ca = Wc * MX::fmax(
-            0.0, -log((d_c - d_safe_ca) / (d_act_ca - d_safe_ca)));
-        H_ca += h_ca;
-    }
-    return H_ca;
 }
 
 // 构建（或复用）Opti 优化问题。配置（预测时域、时间步、输入限幅、

@@ -1,6 +1,6 @@
 <launch>
     <!-- 1=fixed（固定复杂场景）, 2=random（随机障碍物） -->
-    <arg name="scene" default="1" />
+    <arg name="scene" default="2" />
     <!-- 全局层算法选择: kino_astar=kinodynamic A*, astar=纯 A* -->
     <arg name="global_planner" default="1" /> <!-- 1=astar（纯 A*）, 2=kino_astar（kinodynamic A*） -->
 
@@ -52,7 +52,7 @@
 
     <group if="$(eval arg('scene') == 1)">
         <include file="$(find form_nav)/launch/obs_generator.launch">
-            <arg name="dyn_obs_num" value="0" /> <!-- -1=全部, 0=关闭, n>0=只取前 n 个 -->
+            <arg name="dyn_obs_num" value="-1" /> <!-- -1=全部, 0=关闭, n>0=只取前 n 个 -->
             <arg name="rviz" value="false" />
         </include>
     </group>
