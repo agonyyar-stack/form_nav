@@ -477,9 +477,11 @@ MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
     for (int m = 0; m < nearest_obs_num_; ++m) {
         MX o = obstacle_k(Slice(3 * m, 3 * m + 3));
         MX d_eff = MX::norm_2(pos - o) - drone_radius_;
+        // MX d_c = MX::fmax(d_eff, safe_dist_ + 1e-2);
+        // MX term = Wo * MX::fmax(0.0, -log((d_c - safe_dist_) /
+        //                                   (detect_range_ - safe_dist_) + 1e-3));
         MX d_c = MX::fmax(d_eff, safe_dist_ + 1e-2);
-        MX term = Wo * MX::fmax(0.0, -log((d_c - safe_dist_) /
-                                          (detect_range_ - safe_dist_)));
+        MX term = Wo * log(1 + (detect_range_ - safe_dist_) / (d_c - safe_dist_));
         H_oa += term;
     }
     return H_oa;
