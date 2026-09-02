@@ -23,7 +23,7 @@ static_obstacles:
   size:
   - 1.1
   - 1.3
-  - 0.9
+  - 3.0
 - id: 2
   shape: cuboid
   x: -17.8
@@ -31,7 +31,7 @@ static_obstacles:
   size:
   - 1.6
   - 1.2
-  - 2.4
+  - 3.0
 - id: 3
   shape: cuboid
   x: -18.2
@@ -39,7 +39,7 @@ static_obstacles:
   size:
   - 1.3
   - 1.6
-  - 1.2
+  - 3.0
 - id: 4
   shape: cuboid
   x: -16.0
@@ -47,7 +47,7 @@ static_obstacles:
   size:
   - 1.6
   - 1.3
-  - 2.0
+  - 3.0
 - id: 5
   shape: cuboid
   x: -15.8
@@ -55,7 +55,7 @@ static_obstacles:
   size:
   - 2.1
   - 1.5
-  - 2.8
+  - 3.0
 - id: 6
   shape: cuboid
   x: -15.2
@@ -79,7 +79,7 @@ static_obstacles:
   size:
   - 1.3
   - 1.5
-  - 1.0
+  - 3.0
 - id: 9
   shape: cuboid
   x: -14.0
@@ -87,7 +87,7 @@ static_obstacles:
   size:
   - 1.8
   - 1.2
-  - 2.2
+  - 3.0
 - id: 10
   shape: cuboid
   x: -12.4
@@ -95,7 +95,7 @@ static_obstacles:
   size:
   - 1.5
   - 1.7
-  - 1.4
+  - 3.0
 - id: 11
   shape: cuboid
   x: -11.7
@@ -103,7 +103,7 @@ static_obstacles:
   size:
   - 2.2
   - 1.4
-  - 2.6
+  - 3.0
 - id: 12
   shape: cuboid
   x: -11.639442625661669
@@ -111,7 +111,7 @@ static_obstacles:
   size:
   - 1.2
   - 1.5
-  - 2.0
+  - 3.0
 - id: 13
   shape: cuboid
   x: -11.428491930996104
@@ -119,7 +119,7 @@ static_obstacles:
   size:
   - 1.6
   - 1.3
-  - 1.2
+  - 3.0
 - id: 14
   shape: cuboid
   x: -11.4
@@ -127,7 +127,7 @@ static_obstacles:
   size:
   - 1.4
   - 1.8
-  - 2.4
+  - 3.0
 - id: 15
   shape: cuboid
   x: -9.8
@@ -135,7 +135,7 @@ static_obstacles:
   size:
   - 1.8
   - 1.5
-  - 1.0
+  - 3.0
 - id: 16
   shape: cuboid
   x: -8.679135932560591
@@ -143,7 +143,7 @@ static_obstacles:
   size:
   - 1.3
   - 1.6
-  - 2.2
+  - 3.0
 - id: 17
   shape: cuboid
   x: -7.4
@@ -151,7 +151,7 @@ static_obstacles:
   size:
   - 2.0
   - 1.3
-  - 1.5
+  - 3.0
 - id: 18
   shape: cuboid
   x: -6.284088514225501
@@ -159,7 +159,7 @@ static_obstacles:
   size:
   - 1.4
   - 1.3
-  - 2.8
+  - 3.0
 - id: 19
   shape: cuboid
   x: -8.29794101279911
@@ -167,7 +167,7 @@ static_obstacles:
   size:
   - 1.2
   - 1.6
-  - 0.8
+  - 3.0
 - id: 20
   shape: cuboid
   x: -6.2
@@ -183,7 +183,7 @@ static_obstacles:
   size:
   - 1.4
   - 1.2
-  - 2.3
+  - 3.0
 - id: 22
   shape: cuboid
   x: -5.751029493600445
@@ -191,7 +191,7 @@ static_obstacles:
   size:
   - 1.3
   - 1.4
-  - 2.0
+  - 3.0
 - id: 23
   shape: cuboid
   x: -2.4718651211801896
@@ -199,7 +199,7 @@ static_obstacles:
   size:
   - 1.6
   - 1.8
-  - 1.3
+  - 3.0
 - id: 24
   shape: cuboid
   x: -3.4
@@ -207,7 +207,7 @@ static_obstacles:
   size:
   - 1.3
   - 1.5
-  - 2.4
+  - 3.0
 - id: 25
   shape: cuboid
   x: -2.149936552725447
@@ -215,7 +215,7 @@ static_obstacles:
   size:
   - 2.191253951527924
   - 1.6880927291886194
-  - 1.7
+  - 3.0
 - id: 26
   shape: cuboid
   x: -3.4816917084028938
@@ -223,7 +223,7 @@ static_obstacles:
   size:
   - 1.5
   - 1.3
-  - 1.1
+  - 3.0
 - id: 27
   shape: cuboid
   x: -1.6
@@ -231,7 +231,7 @@ static_obstacles:
   size:
   - 1.6
   - 1.4
-  - 2.6
+  - 3.0
 - id: 28
   shape: cuboid
   x: -0.8
@@ -247,7 +247,7 @@ static_obstacles:
   size:
   - 1.3
   - 1.2
-  - 1.6
+  - 3.0
 - id: 30
   shape: cuboid
   x: -9.0
@@ -268,7 +268,7 @@ dynamic_obstacles:
 - id: 0
   shape: cylinder
   radius: 0.3
-  height: 2.0
+  height: 3.0
   z_center: 1.0
   center:
   - -5.0

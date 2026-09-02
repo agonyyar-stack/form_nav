@@ -480,7 +480,7 @@ MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
         // MX d_c = MX::fmax(d_eff, safe_dist_ + 1e-2);
         // MX term = Wo * MX::fmax(0.0, -log((d_c - safe_dist_) /
         //                                   (detect_range_ - safe_dist_) + 1e-3));
-        MX d_c = MX::fmax(d_eff, safe_dist_ + 1e-2);
+        MX d_c = MX::fmax(d_eff, safe_dist_ + 1e-15);
         MX term = Wo * log(1 + (detect_range_ - safe_dist_) / (d_c - safe_dist_));
         H_oa += term;
     }
