@@ -892,9 +892,9 @@ int main(int argc, char **argv) {
     double arrival_velocity          = nh_private.param<double>("mpc/arrival_velocity", 0.1);
     double w_u                       = nh_private.param<double>("mpc/w_u", 100.0);
     double w_du                      = nh_private.param<double>("mpc/w_du", 100.0);
-    double w_dyn                     = nh_private.param<double>("mpc/w_dyn", 300.0);
-    double d_safe_dyn                = nh_private.param<double>("mpc/d_safe_dyn", 0.2);
-    double d_act_dyn                 = nh_private.param<double>("mpc/d_act_dyn", 2.5);
+    double m_dyn                     = nh_private.param<double>("mpc/m_dyn", 50.0);
+    double d_bar_dyn                 = nh_private.param<double>("mpc/d_bar_dyn", 1.5);
+    double k_dyn                     = nh_private.param<double>("mpc/k_dyn", 10.0);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
         throw std::runtime_error(
             "communication/neighbor_trajectory_timeout must be positive");
@@ -910,15 +910,14 @@ int main(int argc, char **argv) {
     if (!std::isfinite(w_u) || w_u < 0.0) {
         throw std::runtime_error("mpc/w_u must be non-negative");
     }
-    if (!std::isfinite(w_dyn) || w_dyn < 0.0) {
-        throw std::runtime_error("mpc/w_dyn must be non-negative");
+    if (!std::isfinite(m_dyn) || m_dyn < 0.0) {
+        throw std::runtime_error("mpc/m_dyn must be non-negative");
     }
-    if (!std::isfinite(d_safe_dyn) || d_safe_dyn < 0.0) {
-        throw std::runtime_error("mpc/d_safe_dyn must be non-negative");
+    if (!std::isfinite(d_bar_dyn) || d_bar_dyn < 0.0) {
+        throw std::runtime_error("mpc/d_bar_dyn must be non-negative");
     }
-    if (!std::isfinite(d_act_dyn) || d_act_dyn <= d_safe_dyn) {
-        throw std::runtime_error(
-            "mpc/d_act_dyn must be finite and greater than mpc/d_safe_dyn");
+    if (!std::isfinite(k_dyn) || k_dyn <= 0.0) {
+        throw std::runtime_error("mpc/k_dyn must be finite and positive");
     }
     if (!std::isfinite(d_safe_ca) || d_safe_ca < 0.0) {
         throw std::runtime_error("mpc/d_safe_ca must be non-negative");
@@ -1020,9 +1019,9 @@ int main(int argc, char **argv) {
     mpc_ptr->setMaxVelocity(u_max);
     mpc_ptr->setMaxAngularVelocity(w_max);
     mpc_ptr->setObstacleWeight(w_oa);
-    mpc_ptr->setDynamicObstacleWeight(w_dyn);
-    mpc_ptr->setDynamicObstacleSafeDistance(d_safe_dyn);
-    mpc_ptr->setDynamicObstacleActivationRange(d_act_dyn);
+    mpc_ptr->setDynamicObstacleWeight(m_dyn);
+    mpc_ptr->setDynamicObstacleBarrierDistance(d_bar_dyn);
+    mpc_ptr->setDynamicObstacleSteepness(k_dyn);
     mpc_ptr->setNearestObstacleNum(nearest_obs_num);
     mpc_ptr->setDroneRadius(drone_radius);
     mpc_ptr->setSafeDistance(safe_dist);
@@ -1061,7 +1060,7 @@ int main(int argc, char **argv) {
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
              "lookahead=%.2f, yaw_lock_dist=%.2f, tau_v=%.2f, tau_w=%.2f, "
              "arrival_dist=%.2f, arrival_vel=%.2f, "
-             "w_dyn=%.2f, d_safe_dyn=%.2f, d_act_dyn=%.2f",
+             "m_dyn=%.2f, d_bar_dyn=%.2f, k_dyn=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
              d_safe_ca, q_ca, w_ca, w_form, w_subgoal, w_yaw,
              nearest_obs_num, drone_radius, w_oa,
@@ -1070,7 +1069,7 @@ int main(int argc, char **argv) {
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
              lookahead_distance, yaw_lock_dist, tau_v, tau_w,
              ARRIVAL_DISTANCE, ARRIVAL_VELOCITY,
-             w_dyn, d_safe_dyn, d_act_dyn);
+             m_dyn, d_bar_dyn, k_dyn);
 
     // 第三步：初始化 KD-tree 障碍物地图（静态避障）
     kd_tree_ptr.reset(new KdTreeMap());

@@ -79,10 +79,10 @@ private: //存储了 MPC 算法运行时的配置和状态
     // KD-tree 对数势垒避障权重
     double Wo;             // 障碍物避障权重 (标量)
 
-    // 动态障碍物避障（已知轨迹 + 形状感知对数势垒）
-    double W_dyn_;         // 动态障碍物势垒权重 (标量)
-    double d_safe_dyn_;    // 动态障碍物最小安全距离 L (m，表面口径)
-    double d_act_dyn_;     // 动态障碍物激活范围 D̄ (m)
+    // 动态障碍物避障（已知轨迹 + 形状感知 softplus 势垒）
+    double M_dyn_;         // softplus 势垒强度 M（标量，默认 50）
+    double d_bar_dyn_;     // softplus 势垒中心距离 d_bar (m，有效距离口径，默认 1.5)
+    double k_dyn_;         // softplus 陡度 k（默认 10，量纲 1/m）
 
     // KD-tree 静态避障参数（第三步）
     KdTreeMap* kd_tree_ptr_;   // 指向障碍物 KD-tree 的指针 (外部管理生命周期)
@@ -190,12 +190,12 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setYawTimeConstant(double tau) { tau_w_ = tau > 0.0 ? tau : 0.5; updateDiscreteModel(); }
     /// 设置 KD-tree 对数势垒避障权重
     void setObstacleWeight(double w) { Wo = w; }
-    /// 设置动态障碍物势垒权重
-    void setDynamicObstacleWeight(double w) { W_dyn_ = w; }
-    /// 设置动态障碍物最小安全距离 (m，表面口径)
-    void setDynamicObstacleSafeDistance(double d) { d_safe_dyn_ = d; }
-    /// 设置动态障碍物激活范围 (m，须大于安全距离)
-    void setDynamicObstacleActivationRange(double d) { d_act_dyn_ = d; }
+    /// 设置动态障碍物 softplus 势垒强度 M
+    void setDynamicObstacleWeight(double M) { M_dyn_ = M; }
+    /// 设置动态障碍物 softplus 势垒中心距离 d_bar (m，有效距离口径)
+    void setDynamicObstacleBarrierDistance(double d) { d_bar_dyn_ = d; }
+    /// 设置动态障碍物 softplus 陡度 k
+    void setDynamicObstacleSteepness(double k) { k_dyn_ = k; }
     /// 设置编队内硬安全距离 (m)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
     void setCollisionBarrierQ(double q) { q_ca = q; }

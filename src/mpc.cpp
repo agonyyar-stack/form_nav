@@ -18,6 +18,13 @@ double pointSegmentDistanceSq(const Eigen::Vector3d& p,
     const Eigen::Vector3d c = a + t * e;
     return (p - c).squaredNorm();
 }
+
+// 数值稳定的 softplus：ln(1+e^t)。t 很大时直接 exp(t) 会溢出，
+// 改用等价形式 t + ln(1+e^{-t})；切换点处函数值与一阶导均连续。
+MX stableSoftplus(const MX& t) {
+    return MX::if_else(t > 40.0, t + MX::log(1.0 + MX::exp(-t)),
+                       MX::log(1.0 + MX::exp(t)));
+}
 }  // namespace
 
 Mpc::Mpc() { 
@@ -47,10 +54,10 @@ Mpc::Mpc() {
     // 编队偏移量由外部 setFormationOffsets() 注入，默认自身偏移为 [0,0,0,0]
     // KD-tree 对数势垒避障权重
     Wo = 50000;            // 障碍物避障权重 (标量)
-    // 动态障碍物避障（已知轨迹 + 形状感知）
-    W_dyn_ = 300;          // 动态障碍物势垒权重 (标量)
-    d_safe_dyn_ = 0.2;     // 动态障碍物最小安全距离 (m，表面口径)
-    d_act_dyn_ = 2.5;      // 动态障碍物激活范围 (m)
+    // 动态障碍物避障（已知轨迹 + 形状感知 softplus 势垒）
+    M_dyn_ = 50;           // softplus 势垒强度 M (标量)
+    d_bar_dyn_ = 1.5;      // softplus 势垒中心距离 d_bar (m，有效距离口径)
+    k_dyn_ = 10;           // softplus 陡度 k (1/m)
     // KD-tree 静态避障参数（第三步）
     kd_tree_ptr_ = nullptr;   // 障碍物 KD-tree 指针，由外部设置
     nearest_obs_num_ = 3;     // 每个预测步查询的最近障碍点数量
@@ -488,12 +495,16 @@ MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
 // 最近点 c，再用"最近点处障碍物表面"距离 d_surface（球体扣半径、圆柱按竖直柱体
 // 分段精确到表面），再扣无人机半径得到有效距离 d_eff。这样避障不依赖预测步与
 // 障碍物轨迹的时间对齐：即使求解滞后/卡顿导致时间步错开，也会避开障碍物该段
-// 扫掠路径。对数势垒参数独立（W_dyn_/d_safe_dyn_/d_act_dyn_），不复用编队避碰
-// 参数（编队为双向避让，动态障碍物为单向且可能更快）。
+// 扫掠路径。softplus 势垒参数独立（M_dyn_/d_bar_dyn_/k_dyn_），不复用编队
+// 避碰参数（编队为双向避让，动态障碍物为单向且可能更快）。
+// 惩罚项（2026-09-02 起）：
+//   H_dyn = M_dyn·ln(1 + e^{k_dyn·(d_bar_dyn − d_eff)})
+// 无死区、无截断、处处光滑：代价随距离减小连续增大但保持有限（无硬边界），
+// 动态障碍物快速逼近时也不会出现死区势垒边界处梯度剧变导致的求解失败/悬停。
 MX Mpc::dynamicObstacleAvoidance(MX current_states, int k_step) {
     MX H_dyn = MX(0.0);
     const int C = dyn_obs_shape_param_.size2();
-    if (C <= 0 || d_act_dyn_ <= d_safe_dyn_) {
+    if (C <= 0 || M_dyn_ <= 0.0 || k_dyn_ <= 0.0) {
         return H_dyn;
     }
 
@@ -533,11 +544,10 @@ MX Mpc::dynamicObstacleAvoidance(MX current_states, int k_step) {
         // 形状分支：0=球体，1=圆柱
         MX d_surface = MX::if_else(shape == 0.0, sphere_dist, cyl_dist);
 
-        // 统一口径：扣无人机半径；对数势垒钳位防 log 参数非正
+        // 统一口径：扣无人机半径，套 softplus 势垒（M=0 或 k=0 时该项禁用）
         MX d_eff = d_surface - drone_radius_;
-        MX d_c = MX::fmax(d_eff, d_safe_dyn_ + 1e-2);
-        MX term = W_dyn_ * MX::fmax(
-            0.0, -log((d_c - d_safe_dyn_) / (d_act_dyn_ - d_safe_dyn_)));
+        MX spp_t = k_dyn_ * (d_bar_dyn_ - d_eff);
+        MX term = M_dyn_ * stableSoftplus(spp_t);
         H_dyn += term;
     }
     return H_dyn;
