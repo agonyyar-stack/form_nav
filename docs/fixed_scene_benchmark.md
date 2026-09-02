@@ -2,8 +2,8 @@
 
 ## 1. 场景说明
 
-固定场景由 `src/fixed_obs.cpp` 生成（参考 `src/random_obs.cpp` 的发布方式，
-话题输出保持一致）：
+固定场景由 `src/obs_generator.cpp` 按 `config/scenes/fixed_scene.yaml` 生成
+（参考 `src/random_obs.cpp` 的发布方式，话题输出保持一致）：
 
 - 发布话题：`/map_generator/global_cloud`、`/map_generator/local_cloud`
   （`sensor_msgs/PointCloud2`，`world` 坐标系），频率默认 10 Hz
@@ -75,29 +75,97 @@ y=  -9  |·|▓|·|▓|·|·|·|·|·|·|
 所有障碍物互不重叠，相邻最小间隙约 0.7 m，主干可行通道间隙约 1.6~2.5 m；
 入口、出口附近留空 ≥1.6 m，起飞区（x < -20）与目标区（x > 0）完全空旷。
 
+### 动态障碍物（2026-08-31 新增）
+
+固定场景默认带 **2 个**动态障碍物（1 圆柱 + 1 球体），用于验证 MPC 动态避障：
+均为直线往复运动，运动中心位于世界坐标 x 轴（y=0 主线走廊）附近，扫掠范围
+覆盖无人机主线飞行通道。动态障碍物的位置、形状、尺寸、轨迹方向/长度、
+最大速度均在 `config/scenes/fixed_scene.yaml` 中定义（用编辑器修改后保存即可）：
+
+| id | 形状 | 运动中心 (x, y) | 方向 | 轨迹长度 | 最大速度 |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 圆柱 (r=0.3, h=2.0) | (-5.0, 0) | 0°（+x） | 3.0 m | 1.5 m/s |
+| 1 | 球体 (r=0.3) | (-8.0, 0) | 90°（+y） | 1.0 m | 1.5 m/s |
+
+运动规律（完全确定性，每次运行一致）：
+
+```
+p(t) = center + A·sin(ωt + φ)·dir，A = length/2，ω = v_max / A
+```
+
+轨迹采样 `dyn_obs/traj_dt` = 0.05 s、`dyn_obs/traj_steps` = 21（与 MPC
+`N=20` 网格对齐，修改 MPC 预测时域时需同步调整）。
+
+发布方式与 `random_obs` 保持一致：
+
+- `/map_generator/global_cloud`、`/map_generator/local_cloud` —— 仍仅含静态
+  立方体（A*/静态 KD-tree 使用，动态障碍物不进入，避免污染全局规划）
+- `/map_generator/dynamic_cloud` —— 动态障碍物点云（仅可视化）
+- `/dynamic_obstacles/trajectory` —— 动态障碍物预测轨迹（MPC 动态避障输入，
+  `form_nav::DynamicObstacleTrajectory`，world 系）
+
+关闭动态障碍物（静态基准对比）：`dyn_obs_num:=0`。
+
 ## 2. 启动方式
 
 单独查看场景（不启动规划栈）：
 
 ```bash
-roslaunch form_nav fixed_obs.launch rviz:=true
+roslaunch form_nav obs_generator.launch rviz:=true
 ```
 
 完整定量对比实验（Gazebo + 6 机编队 + kino A* + MPC，使用固定场景）：
 
 ```bash
-roslaunch form_nav formation_planning.launch scene:=fixed
+roslaunch form_nav formation_test.launch scene:=1   # 1=fixed（默认），2=random
 ```
 
 单机快速验证（Gazebo + uav0 + kino A* + MPC，使用固定场景）：
 
 ```bash
-roslaunch form_nav test.launch scene:=fixed
+roslaunch form_nav single_test.launch scene:=1
 ```
 
-`scene` 参数默认 `random`（保持原有随机障碍物行为不变），传 `fixed` 时自动用
-`fixed_obs` 替换 `random_obs`，其余节点与话题不变；该参数在
-`formation_planning.launch` 与 `test.launch` 中均已支持。
+`scene:=1`（默认）时自动用 `obs_generator`（YAML 场景）替换 `random_obs`，
+其余节点与话题不变；`scene:=2` 保持原有随机障碍物行为。该参数在
+`formation_test.launch` 与 `single_test.launch` 中均已支持。
+
+固定场景默认带上述 1 个动态圆柱；如需纯静态基准，可在启动时传
+`dyn_obs_num:=0`（作用于 `obs_generator.launch`，例如
+`roslaunch form_nav obs_generator.launch dyn_obs_num:=0`）；
+自定义场景文件可传 `scene_file:=path/to/my_scene.yaml`。
+
+## 2.5 可视化场景编辑器
+
+`scripts/scene_editor.py` 是基于 PyQt5 的 2D 俯视编辑器，用于手动自定义
+障碍物布局：
+
+```bash
+python3 scripts/scene_editor.py                          # 打开默认固定场景
+python3 scripts/scene_editor.py --scene fixed_scene.yaml    # 打开指定场景
+python3 scripts/scene_editor.py --publish                # 编辑 + 实时发布到 ROS
+```
+
+功能：
+
+- 静态障碍物：立方体（`cuboid`，`size=[lx, ly, h]`）或圆柱（`cylinder`，
+  `radius`/`height`），可编辑位置与尺寸
+- 动态障碍物：圆柱或球体，可编辑位置、尺寸、轨迹方向（`direction_deg`，
+  `0=+x, 90=+y`）与轨迹长度（`length`，峰峰长度，振幅 = length/2）；
+  最大速度默认 1.5 m/s（可编辑），仅支持直线往复运动
+- 画布上直接用鼠标编辑：拖动障碍物移动位置，拖动选中障碍物四角手柄调整
+  xy 尺寸（立方体调长宽、圆柱/球体调半径），右侧属性面板精确编辑；
+  编辑按钮位于右侧属性面板下方，底部时间滑条 + 播放按钮可预览动态障碍物
+  运动与扫掠区域
+- 冲突检查：静态-静态重叠、动态扫掠与静态相交、动态-动态扫掠相交会红色
+  高亮并在状态栏提示
+- 保存/加载 YAML 场景文件（与 `obs_generator` 节点共用格式），可用
+  `scene_file:=` 传给 `obs_generator.launch` 直接运行
+
+`--publish` 模式会把当前场景实时发布到
+`/map_generator/global_cloud`、`local_cloud`、`dynamic_cloud` 与
+`/dynamic_obstacles/trajectory`（需先 `source devel/setup.bash`），可在 RViz
+中直接看到编辑效果。
 
 ## 3. 发布固定目标
 

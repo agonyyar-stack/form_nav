@@ -14,6 +14,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <Eigen/Eigen>
 #include <random>
+#include "form_nav/DynamicObstacleTrajectory.h"
 
 using namespace std;
 
@@ -33,6 +34,8 @@ uniform_real_distribution<double> rand_inf;
 
 ros::Publisher _local_map_pub;
 ros::Publisher _all_map_pub;
+ros::Publisher _dyn_map_pub;    // 动态障碍物点云（仅可视化）
+ros::Publisher _dyn_traj_pub;   // 动态障碍物预测轨迹（MPC 避障输入）
 ros::Publisher click_map_pub_;
 ros::Subscriber _odom_sub;
 
@@ -59,8 +62,13 @@ uniform_real_distribution<double> rand_z_;
 struct DynamicObstacle
 {
   enum TrajType { STRAIGHT = 0, CIRCLE = 1, ELLIPSE = 2 };
+  enum Shape { SPHERE = 0, CYLINDER = 1 };
 
   TrajType type;
+  Shape shape;
+  double radius;          // 障碍物半径 (m)
+  double height;          // 圆柱高度 (m)，球体填 0
+  double z_center;        // 形状中心高度 (m)
   Eigen::Vector2d center;       // 轨迹中心 / 起点
   double direction;             // 直线运动方向角 (rad)
   double speed_max;             // 最大速度 (m/s)
@@ -72,14 +80,17 @@ struct DynamicObstacle
 
 int _pattern = 1;  // 1=仅静态, 2=仅动态, 3=静态+动态
 int _dyn_obs_num = 0;
-double _dyn_obs_size   = 0.8;   // 底面边长 (m)
+double _dyn_obs_radius = 0.3;   // 障碍物半径 (m)
 double _dyn_obs_height = 2.0;   // 高度 (m)
+double _dyn_traj_dt    = 0.05;  // 障碍物轨迹采样步长 (s)，对齐 MPC
+int    _dyn_traj_steps = 11;    // 障碍物轨迹步数 (N+1)
 double _dyn_speed_l    = 0.5;   // 最小速度 (m/s)
 double _dyn_speed_h    = 2.0;   // 最大速度 (m/s)
 double _dyn_period_l   = 3.0;   // 最小周期 (s)
 double _dyn_period_h   = 8.0;   // 最大周期 (s)
 double _dyn_radius_l   = 1.5;   // 最小轨迹半径 (m)
 double _dyn_radius_h   = 5.0;   // 最大轨迹半径 (m)
+uniform_real_distribution<double> rand_z_center;
 
 vector<DynamicObstacle> _dyn_obstacles;
 ros::Time _start_time;
@@ -90,6 +101,7 @@ sensor_msgs::PointCloud2 globalMap_pcd;
 pcl::PointCloud<pcl::PointXYZ> cloudMap;
 
 sensor_msgs::PointCloud2 localMap_pcd;
+sensor_msgs::PointCloud2 dynMap_pcd;
 pcl::PointCloud<pcl::PointXYZ> clicked_cloud_;
 
 void RandomMapGenerate()
@@ -327,30 +339,63 @@ void RandomMapGenerateCylinder()
 }
 
 // ============ 动态障碍物函数 ============
-// 在指定位置生成长方体点云 (底面 0.8m, 高 2.0m)
-void addCuboidToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
-                      double cx, double cy)
+// 在指定位置生成圆柱点云（侧面 + 顶面，底面贴地，半径 r、高 h）
+void addCylinderToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
+                        double cx, double cy, double r, double h)
 {
   pcl::PointXYZ pt;
-  double w = _dyn_obs_size;
-  double h = _dyn_obs_height;
-
-  // 对齐到栅格
-  cx = floor(cx / _resolution) * _resolution + _resolution / 2.0;
-  cy = floor(cy / _resolution) * _resolution + _resolution / 2.0;
-
-  int widNum = ceil(w / _resolution);
   int heiNum = ceil(h / _resolution);
+  int angNum = std::max(8, static_cast<int>(ceil(2.0 * M_PI * r / _resolution)));
 
-  for (int r = -widNum / 2; r < widNum / 2; r++)
-    for (int s = -widNum / 2; s < widNum / 2; s++)
-      for (int t = 0; t < heiNum; t++)
+  // 侧面
+  for (int t = 0; t < heiNum; t++)
+    for (int a = 0; a < angNum; a++)
+    {
+      double ang = 2.0 * M_PI * a / angNum;
+      pt.x = cx + r * cos(ang);
+      pt.y = cy + r * sin(ang);
+      pt.z = (t + 0.5) * _resolution + 1e-2;
+      cloud.points.push_back(pt);
+    }
+
+  // 顶面
+  int radNum = ceil(r / _resolution);
+  for (int i = -radNum; i <= radNum; i++)
+    for (int j = -radNum; j <= radNum; j++)
+    {
+      double x = cx + (i + 0.5) * _resolution;
+      double y = cy + (j + 0.5) * _resolution;
+      if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r)
       {
-        pt.x = cx + (r + 0.5) * _resolution + 1e-2;
-        pt.y = cy + (s + 0.5) * _resolution + 1e-2;
-        pt.z = (t + 0.5) * _resolution + 1e-2;
+        pt.x = x;
+        pt.y = y;
+        pt.z = h + 1e-2;
         cloud.points.push_back(pt);
       }
+    }
+}
+
+// 在指定位置生成球体表面点云（球心 (cx, cy, cz)、半径 r）
+void addSphereToCloud(pcl::PointCloud<pcl::PointXYZ>& cloud,
+                      double cx, double cy, double cz, double r)
+{
+  pcl::PointXYZ pt;
+  int ringNum = std::max(4, static_cast<int>(ceil(M_PI * r / _resolution)));
+  for (int i = 0; i <= ringNum; i++)
+  {
+    double phi = M_PI * i / ringNum;   // 0..pi
+    double z = cz + r * cos(phi);
+    double rr = r * sin(phi);
+    int angNum = std::max(4, static_cast<int>(ceil(2.0 * M_PI * rr / _resolution)));
+    for (int a = 0; a < angNum; a++)
+    {
+      double ang = 2.0 * M_PI * a / angNum;
+      pt.x = cx + rr * cos(ang);
+      pt.y = cy + rr * sin(ang);
+      pt.z = z;
+      cloud.points.push_back(pt);
+    }
+  }
 }
 
 // 计算单个动态障碍物当前位置
@@ -394,9 +439,11 @@ void initDynamicObstacles()
   uniform_real_distribution<double> rand_speed(_dyn_speed_l, _dyn_speed_h);
   uniform_real_distribution<double> rand_period(_dyn_period_l, _dyn_period_h);
   uniform_real_distribution<double> rand_radius(_dyn_radius_l, _dyn_radius_h);
+  rand_z_center = uniform_real_distribution<double>(
+      0.6, std::max(1.2, _z_size - 0.6));
 
-  // 安全边距 (障碍物半宽 + 轨迹振幅)
-  double margin = _dyn_obs_size / 2.0 + _dyn_radius_h;
+  // 安全边距 (障碍物半径 + 轨迹振幅)
+  double margin = _dyn_obs_radius + _dyn_radius_h;
 
   for (int i = 0; i < _dyn_obs_num; i++)
   {
@@ -411,6 +458,15 @@ void initDynamicObstacles()
     else
       obs.type = DynamicObstacle::ELLIPSE;
 
+    // 随机选择形状: 50% 圆柱, 50% 球体
+    obs.shape = (rand_type(eng) < 0.5) ? DynamicObstacle::CYLINDER
+                                       : DynamicObstacle::SPHERE;
+    obs.radius = _dyn_obs_radius;
+    obs.height = _dyn_obs_height;
+    obs.z_center = (obs.shape == DynamicObstacle::SPHERE)
+                       ? rand_z_center(eng)
+                       : obs.height / 2.0;
+
     obs.speed_max = rand_speed(eng);
     obs.period   = rand_period(eng);
     obs.direction = rand_dir(eng);
@@ -421,7 +477,7 @@ void initDynamicObstacles()
     {
       // 直线: center 是振荡中心，振幅 amp = v_max * T / (2π)
       double amp = obs.speed_max * obs.period / (2.0 * M_PI);
-      double safe_margin = _dyn_obs_size / 2.0 + amp;
+      double safe_margin = _dyn_obs_radius + amp;
       uniform_real_distribution<double> rand_x_s(_x_l + safe_margin, _x_h - safe_margin);
       uniform_real_distribution<double> rand_y_s(_y_l + safe_margin, _y_h - safe_margin);
       obs.center.x() = rand_x_s(eng);
@@ -433,7 +489,7 @@ void initDynamicObstacles()
       double radius = obs.radius_a;
       // 用 speed_max 反算周期，使实际线速度 = speed_max
       obs.period = 2.0 * M_PI * radius / obs.speed_max;
-      double safe_margin = _dyn_obs_size / 2.0 + radius;
+      double safe_margin = _dyn_obs_radius + radius;
       uniform_real_distribution<double> rand_x_c(_x_l + safe_margin, _x_h - safe_margin);
       uniform_real_distribution<double> rand_y_c(_y_l + safe_margin, _y_h - safe_margin);
       obs.center.x() = rand_x_c(eng);
@@ -446,7 +502,7 @@ void initDynamicObstacles()
       // 用 speed_max 反算周期，使最大切向速度 ≈ speed_max
       double effective_r = std::max(obs.radius_a, obs.radius_b);
       obs.period = 2.0 * M_PI * effective_r / obs.speed_max;
-      double safe_margin = _dyn_obs_size / 2.0 + std::max(obs.radius_a, obs.radius_b);
+      double safe_margin = _dyn_obs_radius + std::max(obs.radius_a, obs.radius_b);
       uniform_real_distribution<double> rand_x_e(_x_l + safe_margin, _x_h - safe_margin);
       uniform_real_distribution<double> rand_y_e(_y_l + safe_margin, _y_h - safe_margin);
       obs.center.x() = rand_x_e(eng);
@@ -469,12 +525,54 @@ void updateDynamicObstacles()
   for (auto& obs : _dyn_obstacles)
   {
     Eigen::Vector2d pos = computeDynamicPosition(obs, t);
-    addCuboidToCloud(_dynCloud, pos.x(), pos.y());
+    if (obs.shape == DynamicObstacle::CYLINDER)
+      addCylinderToCloud(_dynCloud, pos.x(), pos.y(), obs.radius, obs.height);
+    else
+      addSphereToCloud(_dynCloud, pos.x(), pos.y(), obs.z_center, obs.radius);
   }
 
   _dynCloud.width = _dynCloud.points.size();
   _dynCloud.height = 1;
   _dynCloud.is_dense = true;
+}
+
+// 发布动态障碍物预测轨迹（已知轨迹 ground truth，供 MPC 避障惩罚使用）。
+// 采样网格与 MPC 对齐：t_k = 消息时间 + k*dt，步数 = N+1；
+// 位置用解析轨迹精确采样，速度用中心差分近似（仅记录/可视化用）。
+void publishDynamicTrajectories()
+{
+  const ros::Time stamp = ros::Time::now();
+  const double t0 = (stamp - _start_time).toSec();
+  const double h = 0.01;
+
+  for (size_t i = 0; i < _dyn_obstacles.size(); ++i)
+  {
+    const DynamicObstacle& obs = _dyn_obstacles[i];
+    form_nav::DynamicObstacleTrajectory msg;
+    msg.header.stamp = stamp;
+    msg.header.frame_id = "world";
+    msg.obstacle_id = static_cast<int>(i);
+    msg.shape = (obs.shape == DynamicObstacle::CYLINDER) ? 1 : 0;
+    msg.radius = obs.radius;
+    msg.height = obs.height;
+    msg.dt = _dyn_traj_dt;
+    msg.steps = static_cast<uint32_t>(_dyn_traj_steps);
+    msg.states.reserve(static_cast<size_t>(msg.steps) * 8);
+
+    for (uint32_t k = 0; k < msg.steps; ++k)
+    {
+      const double tk = t0 + k * msg.dt;
+      const Eigen::Vector2d p = computeDynamicPosition(obs, tk);
+      const Eigen::Vector2d pm = computeDynamicPosition(obs, tk - h);
+      const Eigen::Vector2d pp = computeDynamicPosition(obs, tk + h);
+      const double vx = (pp.x() - pm.x()) / (2.0 * h);
+      const double vy = (pp.y() - pm.y()) / (2.0 * h);
+      msg.states.insert(msg.states.end(), {
+          p.x(), p.y(), obs.z_center, 0.0,
+          vx, vy, 0.0, 0.0});
+    }
+    _dyn_traj_pub.publish(msg);
+  }
 }
 // ========================================
 
@@ -534,24 +632,28 @@ void pubPoints()
     updateDynamicObstacles();
   }
 
-  // 按模式合并点云
-  pcl::PointCloud<pcl::PointXYZ> mergedCloud;
+  // 拆通道发布：
+  //   /map_generator/global_cloud —— 仅静态障碍物（A* 全局规划 + MPC 静态 KD-tree 使用）
+  //   /map_generator/dynamic_cloud —— 仅动态障碍物点云（仅可视化，不影响规划）
+  pcl::PointCloud<pcl::PointXYZ> staticCloud;
   if (_pattern == 1 || _pattern == 3)
   {
-    mergedCloud = cloudMap;  // 包含静态障碍物
+    staticCloud = cloudMap;  // 包含静态障碍物
   }
-  if ((_pattern == 2 || _pattern == 3) && _dyn_obs_num > 0)
-  {
-    mergedCloud += _dynCloud;  // 追加动态障碍物
-  }
-
-  mergedCloud.width = mergedCloud.points.size();
-  mergedCloud.height = 1;
-  mergedCloud.is_dense = true;
-
-  pcl::toROSMsg(mergedCloud, globalMap_pcd);
+  // 仅动态模式：发空点云保活订阅端（A* 等待地图消息），字段合法可被 pcl::fromROSMsg 解析
+  pcl::toROSMsg(staticCloud, globalMap_pcd);
+  globalMap_pcd.header.stamp = ros::Time::now();
   globalMap_pcd.header.frame_id = "world";
   _all_map_pub.publish(globalMap_pcd);
+
+  if ((_pattern == 2 || _pattern == 3) && _dyn_obs_num > 0)
+  {
+    pcl::toROSMsg(_dynCloud, dynMap_pcd);
+    dynMap_pcd.header.stamp = ros::Time::now();
+    dynMap_pcd.header.frame_id = "world";
+    _dyn_map_pub.publish(dynMap_pcd);
+    publishDynamicTrajectories();
+  }
 }
 
 int main(int argc, char **argv)
@@ -561,6 +663,9 @@ int main(int argc, char **argv)
 
   _local_map_pub = n.advertise<sensor_msgs::PointCloud2>("/map_generator/local_cloud", 1);
   _all_map_pub = n.advertise<sensor_msgs::PointCloud2>("/map_generator/global_cloud", 1);
+  _dyn_map_pub = n.advertise<sensor_msgs::PointCloud2>("/map_generator/dynamic_cloud", 1);
+  _dyn_traj_pub =
+      n.advertise<form_nav::DynamicObstacleTrajectory>("/dynamic_obstacles/trajectory", 10);
 
   // click_map_pub_ = n.advertise<sensor_msgs::PointCloud2>("/pcl_render_node/local_map", 1);
 
@@ -591,8 +696,10 @@ int main(int argc, char **argv)
 
   // 动态障碍物参数
   n.param("dyn_obs/num", _dyn_obs_num, 0);
-  n.param("dyn_obs/size", _dyn_obs_size, 0.8);
+  n.param("dyn_obs/size", _dyn_obs_radius, 0.3);  // 语义：半径 (m)
   n.param("dyn_obs/height", _dyn_obs_height, 2.0);
+  n.param("dyn_obs/traj_dt", _dyn_traj_dt, 0.05);
+  n.param("dyn_obs/traj_steps", _dyn_traj_steps, 11);
   n.param("dyn_obs/speed_l", _dyn_speed_l, 0.5);
   n.param("dyn_obs/speed_h", _dyn_speed_h, 2.0);
   n.param("dyn_obs/period_l", _dyn_period_l, 3.0);

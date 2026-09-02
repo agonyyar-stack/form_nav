@@ -13,5 +13,9 @@
     <param name="color/r" value="$(arg color_r)"/>
     <param name="color/g" value="$(arg color_g)"/>
     <param name="color/b" value="$(arg color_b)"/>
+    <!-- 模型部件与配色（默认：rotors_a=前旋翼跟随自定义色，rotors_b=后旋翼固定灰）。
+         若实际显示的前/后相反，把下面两个 mesh 参数对调即可。 -->
+    <!-- <param name="front_mesh_resource" value="package://form_nav/meshes/fake_drone_rotors_b.dae"/> -->
+    <!-- <param name="rear_mesh_resource" value="package://form_nav/meshes/fake_drone_rotors_a.dae"/> -->
   </node>
 </launch>

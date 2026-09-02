@@ -1,0 +1,291 @@
+version: 1
+frame_id: world
+scene:
+  left_x: -21.0
+  center_y: 0.0
+  size_x: 22.0
+  size_y: 22.0
+  size_z: 3.0
+  resolution: 0.2
+static_obstacles:
+- id: 0
+  shape: cuboid
+  x: -18.82349841938883
+  y: -8.037934668071655
+  size:
+  - 1.6469968387776603
+  - 2.0758693361433096
+  - 3.0
+- id: 1
+  shape: cuboid
+  x: -18.4
+  y: -4.8
+  size:
+  - 1.1
+  - 1.3
+  - 3.0
+- id: 2
+  shape: cuboid
+  x: -17.8
+  y: 4.2
+  size:
+  - 1.6
+  - 1.2
+  - 3.0
+- id: 3
+  shape: cuboid
+  x: -18.2
+  y: 7.6
+  size:
+  - 1.3
+  - 1.6
+  - 3.0
+- id: 4
+  shape: cuboid
+  x: -16.0
+  y: -9.0
+  size:
+  - 1.6
+  - 1.3
+  - 3.0
+- id: 5
+  shape: cuboid
+  x: -15.8
+  y: -6.2
+  size:
+  - 2.1
+  - 1.5
+  - 3.0
+- id: 6
+  shape: cuboid
+  x: -15.2
+  y: -2.4
+  size:
+  - 1.2
+  - 1.6
+  - 1.8
+- id: 7
+  shape: cuboid
+  x: -14.255147468002225
+  y: 1.3163606010016695
+  size:
+  - 1.5
+  - 1.4
+  - 3.0
+- id: 8
+  shape: cuboid
+  x: -15.4
+  y: 5.8
+  size:
+  - 1.3
+  - 1.5
+  - 3.0
+- id: 9
+  shape: cuboid
+  x: -14.0
+  y: 8.2
+  size:
+  - 1.8
+  - 1.2
+  - 3.0
+- id: 10
+  shape: cuboid
+  x: -12.4
+  y: -8.2
+  size:
+  - 1.5
+  - 1.7
+  - 3.0
+- id: 11
+  shape: cuboid
+  x: -11.7
+  y: -5.0
+  size:
+  - 2.2
+  - 1.4
+  - 3.0
+- id: 12
+  shape: cuboid
+  x: -11.639442625661669
+  y: -1.9248431263204746
+  size:
+  - 1.2
+  - 1.5
+  - 3.0
+- id: 13
+  shape: cuboid
+  x: -11.428491930996104
+  y: 2.9019476905954367
+  size:
+  - 1.6
+  - 1.3
+  - 3.0
+- id: 14
+  shape: cuboid
+  x: -11.4
+  y: 6.4
+  size:
+  - 1.4
+  - 1.8
+  - 3.0
+- id: 15
+  shape: cuboid
+  x: -9.8
+  y: 8.8
+  size:
+  - 1.8
+  - 1.5
+  - 3.0
+- id: 16
+  shape: cuboid
+  x: -8.679135932560591
+  y: -6.9578503688092725
+  size:
+  - 1.3
+  - 1.6
+  - 3.0
+- id: 17
+  shape: cuboid
+  x: -7.4
+  y: -3.6
+  size:
+  - 2.0
+  - 1.3
+  - 3.0
+- id: 18
+  shape: cuboid
+  x: -6.284088514225501
+  y: -7.74731296101159
+  size:
+  - 1.4
+  - 1.3
+  - 3.0
+- id: 19
+  shape: cuboid
+  x: -8.29794101279911
+  y: 4.17540345019477
+  size:
+  - 1.2
+  - 1.6
+  - 3.0
+- id: 20
+  shape: cuboid
+  x: -6.2
+  y: 6.8
+  size:
+  - 1.7
+  - 1.3
+  - 1.9
+- id: 21
+  shape: cuboid
+  x: -5.4
+  y: 9.0
+  size:
+  - 1.4
+  - 1.2
+  - 3.0
+- id: 22
+  shape: cuboid
+  x: -5.751029493600445
+  y: 3.2733444629938786
+  size:
+  - 1.3
+  - 1.4
+  - 3.0
+- id: 23
+  shape: cuboid
+  x: -2.4718651211801896
+  y: -8.389251844046363
+  size:
+  - 1.6
+  - 1.8
+  - 3.0
+- id: 24
+  shape: cuboid
+  x: -3.4
+  y: -5.4
+  size:
+  - 1.3
+  - 1.5
+  - 3.0
+- id: 25
+  shape: cuboid
+  x: -2.149936552725447
+  y: -3.059297986985686
+  size:
+  - 2.191253951527924
+  - 1.6880927291886194
+  - 3.0
+- id: 26
+  shape: cuboid
+  x: -3.4816917084028938
+  y: 5.29794101279911
+  size:
+  - 1.5
+  - 1.3
+  - 3.0
+- id: 27
+  shape: cuboid
+  x: -1.6
+  y: 7.4
+  size:
+  - 1.6
+  - 1.4
+  - 3.0
+- id: 28
+  shape: cuboid
+  x: -0.8
+  y: 4.6
+  size:
+  - 1.2
+  - 1.5
+  - 0.8
+- id: 29
+  shape: cuboid
+  x: -1.0
+  y: -5.8
+  size:
+  - 1.3
+  - 1.2
+  - 3.0
+- id: 30
+  shape: cuboid
+  x: -9.0
+  y: 10.75
+  size:
+  - 20.0
+  - 0.5
+  - 3.0
+- id: 31
+  shape: cuboid
+  x: -9.0
+  y: -10.75
+  size:
+  - 20.0
+  - 0.5
+  - 3.0
+dynamic_obstacles:
+- id: 0
+  shape: cylinder
+  radius: 0.3
+  height: 3.0
+  z_center: 1.0
+  center:
+  - -5.0
+  - 0.0
+  direction_deg: 0.0
+  length: 3.0
+  speed_max: 1.5
+  phase: 0.0
+- id: 1
+  shape: sphere
+  radius: 0.3
+  height: 0.0
+  z_center: 1.0
+  center:
+  - -8.0
+  - 0.0
+  direction_deg: 90.0
+  length: 1.0
+  speed_max: 1.2
+  phase: 0.0

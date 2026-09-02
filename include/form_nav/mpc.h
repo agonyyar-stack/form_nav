@@ -26,6 +26,15 @@ struct UavState {
     int id;
 };
 
+// 动态障碍物（已知轨迹表，含形状信息用于形状感知距离）
+struct DynamicObstacleState {
+    int id;
+    int shape;      // 0=球体, 1=圆柱
+    double radius;  // 障碍物半径 (m)
+    double height;  // 圆柱高度 (m)，球体填 0
+    Eigen::MatrixXd predicted_states;  // (8, N_+1)，只使用前三行位置
+};
+
 // 全局轨迹路径点 (全局规划器输出, 含空间+速度)
 struct GlobalWaypoint {
     double x, y, z;     // 位置 (m)
@@ -70,18 +79,23 @@ private: //存储了 MPC 算法运行时的配置和状态
     // KD-tree 对数势垒避障权重
     double Wo;             // 障碍物避障权重 (标量)
 
+    // 动态障碍物避障（已知轨迹 + 形状感知对数势垒）
+    double W_dyn_;         // 动态障碍物势垒权重 (标量)
+    double d_safe_dyn_;    // 动态障碍物最小安全距离 L (m，表面口径)
+    double d_act_dyn_;     // 动态障碍物激活范围 D̄ (m)
+
     // KD-tree 静态避障参数（第三步）
     KdTreeMap* kd_tree_ptr_;   // 指向障碍物 KD-tree 的指针 (外部管理生命周期)
     int nearest_obs_num_;      // 每个预测步查询的最近障碍点数量 M
     double drone_radius_;      // 无人机半径 (m)，有效距离 = ||p-o|| - r_drone
-    double safe_dist_;         // 对数势垒最小安全距离 L (m)，有效距离口径（扣无人机半径）
-    double detect_range_;      // 对数势垒探测范围 D̄ (m)，须大于 safe_dist_
+    double safe_dist_;         // 最小安全距离 L (m)，有效距离口径（扣无人机半径）
+    double q_oa_;              // 静态避障势垒参数 q_oa (m)，须大于 safe_dist_
     int replan_max_iter_;      // 最近点重查询重规划的最大迭代次数
 
     //碰撞参数
-    double d_safe_ca; // 编队内硬安全距离（中心距口径，逼近时惩罚发散）
-    double d_act_ca;  // 编队避碰激活范围 D̄（中心距口径，超过则惩罚为 0）
-    double Wc;        // 相互碰撞权重（对数势垒）
+    double d_safe_ca; // 编队内硬安全距离（中心距口径）
+    double q_ca;      // 机间避碰势垒参数 q_ca (m)
+    double Wc;        // 相互碰撞权重
 
     MX X; //状态变量
     MX U; //控制变量
@@ -91,6 +105,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     MX reference_param_;                        // 滚动子目标参考参数 (4, N_+1) [x,y,z,yaw]，各列相同
     MX X_cur_param_;                            // 当前状态参数 (8, 1)
     MX obstacle_param_;                         // 最近障碍点参数 (3*M, N_+1)
+    MX dyn_obs_seg_param_;                      // 动态障碍物最近线段端点参数 (6*C, N_+1)
+    MX dyn_obs_shape_param_;                    // 动态障碍物形状参数 (3, C) [shape, radius, height]
     MX goal_param_;                             // 终点位置参数 (3, 1)，用于制动约束
     std::map<int, MX> neighbor_params_;         // 邻居预测轨迹参数
     bool has_last_solution_;                    // 是否已有上一轮解（用于热启动）
@@ -108,10 +124,11 @@ private: //存储了 MPC 算法运行时的配置和状态
     double built_K_w_;
     size_t built_neighbor_count_;
     int built_nearest_obs_num_;
-    double built_detect_range_;
+    double built_q_oa_;
     double built_safe_dist_;
+    size_t built_dyn_obs_count_;
     double built_d_safe_ca_;
-    double built_d_act_ca_;
+    double built_q_ca_;
     int built_ipopt_max_iter_;
     int ipopt_max_iter_;  // IPOPT 最大迭代次数（可调，避障势垒陡峭时可加大）
     double built_ipopt_tol_;
@@ -173,10 +190,15 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setYawTimeConstant(double tau) { tau_w_ = tau > 0.0 ? tau : 0.5; updateDiscreteModel(); }
     /// 设置 KD-tree 对数势垒避障权重
     void setObstacleWeight(double w) { Wo = w; }
+    /// 设置动态障碍物势垒权重
+    void setDynamicObstacleWeight(double w) { W_dyn_ = w; }
+    /// 设置动态障碍物最小安全距离 (m，表面口径)
+    void setDynamicObstacleSafeDistance(double d) { d_safe_dyn_ = d; }
+    /// 设置动态障碍物激活范围 (m，须大于安全距离)
+    void setDynamicObstacleActivationRange(double d) { d_act_dyn_ = d; }
     /// 设置编队内硬安全距离 (m)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
-    /// 设置编队避碰激活范围 (m，大于 d_safe_ca)
-    void setCollisionActivationRange(double d) { d_act_ca = d; }
+    void setCollisionBarrierQ(double q) { q_ca = q; }
     /// 设置相互碰撞惩罚权重
     void setCollisionWeight(double w) { Wc = w; }
     /// 设置控制输入惩罚权重 (对角矩阵，原 F_)
@@ -196,8 +218,7 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setDroneRadius(double r) { drone_radius_ = r; }
     /// 设置对数避障势垒的最小安全距离 (m，有效距离口径)
     void setSafeDistance(double d) { safe_dist_ = d; }
-    /// 设置对数避障势垒的探测范围 (m)，须大于安全距离
-    void setDetectionRange(double d) { detect_range_ = d; }
+    void setObstacleBarrierQ(double q) { q_oa_ = q; }
     /// 设置最近点重查询重规划的最大迭代次数
     void setReplanMaxIter(int iter) { replan_max_iter_ = iter; }
     /// 设置 IPOPT 最大迭代次数
@@ -221,17 +242,30 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 基于 KD-tree 最近障碍点的对数势垒避障项（障碍点作为参数，不在符号图内查询）
     MX kdtreeObstacleAvoidance(MX current_states, MX obstacle_k);
 
+    /// 基于动态障碍物已知轨迹的形状感知对数势垒避障项（最近线段端点/形状均为参数）
+    MX dynamicObstacleAvoidance(MX current_states, int k_step);
+
     MX collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& neighbor_params, MX current_states); //编队内碰撞避让项
 
     /// 构建/复用 Opti 优化问题（配置变化时重建）
-    bool buildOpti(const std::vector<UavState>& neighbors);
+    bool buildOpti(const std::vector<UavState>& neighbors,
+                   const std::vector<DynamicObstacleState>& dyn_obs);
 
     /// 对查询点集合查询最近障碍点并填充 obstacle 参数值（含索引，供重规划判断）
     std::vector<double> queryObstacleValues(
         const std::vector<Eigen::Vector3d>& query_pts,
         std::vector<int>& out_indices);
 
-    bool solve(double s0, const std::vector<UavState>& neighbors, Eigen::VectorXd current_states); //求解优化问题
+    /// 对查询点集合查询每个动态障碍物轨迹上的最近线段（0.5 s 窗口、0.1 s 节点折线），
+    /// 填充线段端点参数 (6*C, N_+1) 并返回线段索引（供重规划判断）
+    std::vector<double> queryDynamicObstacleSegments(
+        const std::vector<Eigen::Vector3d>& query_pts,
+        const std::vector<DynamicObstacleState>& dyn_obs,
+        std::vector<int>& out_indices);
+
+    bool solve(double s0, const std::vector<UavState>& neighbors,
+               const std::vector<DynamicObstacleState>& dyn_obs,
+               Eigen::VectorXd current_states); //求解优化问题
 
     vector<double> getFirstU(); //最优控制序列中的第一个控制量
     vector<double> getPredictX(); //最优状态序列
