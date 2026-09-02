@@ -863,7 +863,7 @@ int main(int argc, char **argv) {
     double u_max = nh_private.param<double>("mpc/u_max", 6.0);
     double w_max = nh_private.param<double>("mpc/w_max", 2.0);
     double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.75);
-    double d_act_ca  = nh_private.param<double>("mpc/d_act_ca", 1.6);
+    double q_ca      = nh_private.param<double>("mpc/q_ca", 1.6);
     double w_ca      = nh_private.param<double>("mpc/w_ca", 200.0);
     double w_form    = nh_private.param<double>("mpc/w_form", 2000.0);
     double w_subgoal = nh_private.param<double>("mpc/w_subgoal", 20000.0);
@@ -871,7 +871,7 @@ int main(int argc, char **argv) {
     int nearest_obs_num = nh_private.param<int>("mpc/nearest_obs_num", 3);
     double drone_radius = nh_private.param<double>("mpc/drone_radius", 0.35);
     double safe_dist    = nh_private.param<double>("mpc/safe_dist", 0.5);
-    double detect_range = nh_private.param<double>("mpc/detect_range", 2.5);
+    double q_oa         = nh_private.param<double>("mpc/q_oa", 2.5);
     double w_oa         = nh_private.param<double>("mpc/w_oa", 30000.0);
     int replan_max_iter = nh_private.param<int>("mpc/replan_max_iter", 0);
     kd_tree_voxel_size  = nh_private.param<double>("mpc/kd_tree_voxel_size", 0.1);
@@ -923,9 +923,9 @@ int main(int argc, char **argv) {
     if (!std::isfinite(d_safe_ca) || d_safe_ca < 0.0) {
         throw std::runtime_error("mpc/d_safe_ca must be non-negative");
     }
-    if (!std::isfinite(d_act_ca) || d_act_ca <= d_safe_ca) {
+    if (!std::isfinite(q_ca) || q_ca <= d_safe_ca) {
         throw std::runtime_error(
-            "mpc/d_act_ca must be finite and greater than mpc/d_safe_ca");
+            "mpc/q_ca must be finite and greater than mpc/d_safe_ca");
     }
     if (!std::isfinite(w_ca) || w_ca < 0.0) {
         throw std::runtime_error("mpc/w_ca must be non-negative");
@@ -966,9 +966,9 @@ int main(int argc, char **argv) {
     if (!std::isfinite(safe_dist) || safe_dist <= 0.0) {
         throw std::runtime_error("mpc/safe_dist must be positive");
     }
-    if (!std::isfinite(detect_range) || detect_range <= safe_dist) {
+    if (!std::isfinite(q_oa) || q_oa <= safe_dist) {
         throw std::runtime_error(
-            "mpc/detect_range must be greater than mpc/safe_dist");
+            "mpc/q_oa must be greater than mpc/safe_dist");
     }
     if (!std::isfinite(w_oa) || w_oa < 0.0) {
         throw std::runtime_error("mpc/w_oa must be non-negative");
@@ -1026,12 +1026,12 @@ int main(int argc, char **argv) {
     mpc_ptr->setNearestObstacleNum(nearest_obs_num);
     mpc_ptr->setDroneRadius(drone_radius);
     mpc_ptr->setSafeDistance(safe_dist);
-    mpc_ptr->setDetectionRange(detect_range);
+    mpc_ptr->setObstacleBarrierQ(q_oa);
     mpc_ptr->setReplanMaxIter(replan_max_iter);
     mpc_ptr->setIpoptMaxIter(ipopt_max_iter);
     mpc_ptr->setIpoptTol(ipopt_tol);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
-    mpc_ptr->setCollisionActivationRange(d_act_ca);
+    mpc_ptr->setCollisionBarrierQ(q_ca);
     mpc_ptr->setCollisionWeight(w_ca);
     mpc_ptr->setLookaheadDistance(lookahead_distance);
     mpc_ptr->setYawLockDistance(yaw_lock_dist);
@@ -1054,18 +1054,18 @@ int main(int argc, char **argv) {
         DM::diag(DM{w_subgoal, w_subgoal, w_subgoal / 2.0, w_yaw}));
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
-             "d_safe_ca=%.2f, d_act_ca=%.2f, w_ca=%.2f, "
+             "d_safe_ca=%.2f, q_ca=%.2f, w_ca=%.2f, "
              "w_form=%.2f, w_subgoal=%.2f, w_yaw=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
-             "safe_dist=%.2f, detect_range=%.2f, "
+             "safe_dist=%.2f, q_oa=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
              "lookahead=%.2f, yaw_lock_dist=%.2f, tau_v=%.2f, tau_w=%.2f, "
              "arrival_dist=%.2f, arrival_vel=%.2f, "
              "w_dyn=%.2f, d_safe_dyn=%.2f, d_act_dyn=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_ca, d_act_ca, w_ca, w_form, w_subgoal, w_yaw,
+             d_safe_ca, q_ca, w_ca, w_form, w_subgoal, w_yaw,
              nearest_obs_num, drone_radius, w_oa,
-             safe_dist, detect_range, replan_max_iter,
+             safe_dist, q_oa, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
              lookahead_distance, yaw_lock_dist, tau_v, tau_w,

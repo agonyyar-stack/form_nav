@@ -56,7 +56,7 @@ Mpc::Mpc() {
     nearest_obs_num_ = 3;     // 每个预测步查询的最近障碍点数量
     drone_radius_ = 0.35;     // 无人机半径 (m)
     safe_dist_ = 0.5;         // 对数势垒最小安全距离 L (m，有效距离口径)
-    detect_range_ = 2.5;      // 对数势垒探测范围 D̄ (m)
+    q_oa_ = 2.5;              // 静态避障势垒参数 (m)
     replan_max_iter_ = 2;     // 最近点重查询重规划最大迭代次数
     ipopt_max_iter_ = 100;    // IPOPT 最大迭代次数
     ipopt_tol_ = 1e-6;        // IPOPT 收敛容差
@@ -72,16 +72,16 @@ Mpc::Mpc() {
     built_K_w_ = -1.0;
     built_neighbor_count_ = 0;
     built_nearest_obs_num_ = -1;
-    built_detect_range_ = -1.0;
+    built_q_oa_ = -1.0;
     built_safe_dist_ = -1.0;
     built_dyn_obs_count_ = 0;
     built_d_safe_ca_ = -1.0;
-    built_d_act_ca_ = -1.0;
+    built_q_ca_ = -1.0;
     built_ipopt_max_iter_ = -1;
     built_ipopt_tol_ = -1.0;
     //碰撞参数（中心距口径，不扣半径）
     d_safe_ca = 0.75; //编队内硬安全距离
-    d_act_ca = 1.6;   //编队避碰激活范围（小于编队标称间距 2.0）
+    q_ca = 1.6;       //机间避碰势垒参数 (m)
     Wc = 200;         //相互碰撞权重（对数势垒）
     //反步法控制器增益参数
     k1 = DM::diag(DM({7, 7, 7, 6}));
@@ -463,25 +463,17 @@ MX Mpc::ViLmpcDot(int k_step, MX reference_state, std::map<int, MX>& neighbor_pa
 MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
     MX H_oa = MX(0.0);
     if (kd_tree_ptr_ == nullptr || kd_tree_ptr_->empty() ||
-        detect_range_ <= safe_dist_) {
-        // 无 KD-tree 数据时返回零惩罚（与 ESDF 缺数据时行为一致）
+        q_oa_ <= safe_dist_) {
         return H_oa;
     }
 
     MX pos = current_states(Slice(0, 3));       // 世界系位置
 
-    // 对数势垒：H = max{ -M * ln( (d - L) / (D̄ - L) ), 0 }
-    // d 为有效距离（扣无人机半径），L=safe_dist_ 为最小安全距离，
-    // D̄=detect_range_ 为探测范围。d > D̄ 时严格为零；d -> L 时趋于无穷。
-    // 钳位 d >= L + eps 避免 log 参数非正，同时限制最大惩罚值。
     for (int m = 0; m < nearest_obs_num_; ++m) {
         MX o = obstacle_k(Slice(3 * m, 3 * m + 3));
         MX d_eff = MX::norm_2(pos - o) - drone_radius_;
-        // MX d_c = MX::fmax(d_eff, safe_dist_ + 1e-2);
-        // MX term = Wo * MX::fmax(0.0, -log((d_c - safe_dist_) /
-        //                                   (detect_range_ - safe_dist_) + 1e-3));
         MX d_c = MX::fmax(d_eff, safe_dist_ + 1e-15);
-        MX term = Wo * log(1 + (detect_range_ - safe_dist_) / (d_c - safe_dist_));
+        MX term = Wo * log(1 + (q_oa_ - safe_dist_) / (d_c - safe_dist_));
         H_oa += term;
     }
     return H_oa;
@@ -556,18 +548,12 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
     MX H_ca = 0.0;
 
     for (auto const& [j_id, j_param] : neighbor_params) {
-        // a_ij = 1（因为仅遍历邻居）
         MX y_j = j_param(Slice(0, 4), k_step);
         MX pos_j = y_j(Slice(0, 3));
 
-        // 对数势垒（中心距口径）：
-        //   d >= d_act_ca 时惩罚严格为 0；d -> d_safe_ca+ 时惩罚 -> +∞。
-        // 钳位 d >= d_safe_ca + eps 避免 log 参数非正，与障碍物项处理一致。
         MX dist = MX::norm_2(pos_i - pos_j) - (2 * drone_radius_); // 有效间距
         MX d_c = MX::fmax(dist, d_safe_ca + 1e-15);
-        // MX h_ca = Wc * MX::fmax(
-        //     0.0, -log((d_c - d_safe_ca) / (d_act_ca - d_safe_ca)));
-        MX h_ca = Wc * log(1 + (d_act_ca - d_safe_ca) / (d_c - d_safe_ca));
+        MX h_ca = Wc * log(1 + (q_ca - d_safe_ca) / (d_c - d_safe_ca));
         H_ca += h_ca;
     }
     return H_ca;
@@ -705,11 +691,11 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
         std::abs(built_K_w_ - K_w_) < 1e-9 &&
         built_neighbor_count_ == neighbors.size() &&
         built_nearest_obs_num_ == nearest_obs_num_ &&
-        std::abs(built_detect_range_ - detect_range_) < 1e-9 &&
+        std::abs(built_q_oa_ - q_oa_) < 1e-9 &&
         std::abs(built_safe_dist_ - safe_dist_) < 1e-9 &&
         built_dyn_obs_count_ == dyn_obs.size() &&
         std::abs(built_d_safe_ca_ - d_safe_ca) < 1e-9 &&
-        std::abs(built_d_act_ca_ - d_act_ca) < 1e-9 &&
+        std::abs(built_q_ca_ - q_ca) < 1e-9 &&
         built_ipopt_max_iter_ == ipopt_max_iter_ &&
         std::abs(built_ipopt_tol_ - ipopt_tol_) < 1e-12) {
         return true;
@@ -836,11 +822,11 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
     built_K_w_ = K_w_;
     built_neighbor_count_ = neighbors.size();
     built_nearest_obs_num_ = nearest_obs_num_;
-    built_detect_range_ = detect_range_;
+    built_q_oa_ = q_oa_;
     built_safe_dist_ = safe_dist_;
     built_dyn_obs_count_ = dyn_obs.size();
     built_d_safe_ca_ = d_safe_ca;
-    built_d_act_ca_ = d_act_ca;
+    built_q_ca_ = q_ca;
     built_ipopt_max_iter_ = ipopt_max_iter_;
     built_ipopt_tol_ = ipopt_tol_;
     has_last_solution_ = false;
