@@ -66,7 +66,7 @@ Mpc::Mpc() {
     kd_tree_ptr_ = nullptr;   // 障碍物 KD-tree 指针，由外部设置
     nearest_obs_num_ = 3;     // 每个预测步查询的最近障碍点数量
     drone_radius_ = 0.35;     // 无人机半径 (m)
-    safe_dist_ = 0.5;         // 已弃用：softplus 下不再参与代价（保留兼容）
+    safe_dist_ = 0.5;         // 有效距离下限 L (m)，softplus 下参与 d_scale 归一化
     detect_range_ = 0.6;      // 势垒中心距离 D̄ (m)，即 softplus 的 d_bar
     replan_max_iter_ = 2;     // 最近点重查询重规划最大迭代次数
     ipopt_max_iter_ = 100;    // IPOPT 最大迭代次数
@@ -88,13 +88,15 @@ Mpc::Mpc() {
     built_k_oa_ = -1.0;
     built_dyn_obs_count_ = 0;
     built_d_safe_ca_ = -1.0;
-    built_q_ca_ = -1.0;
+    built_d_act_ca_ = -1.0;
+    built_k_ca_ = -1.0;
     built_ipopt_max_iter_ = -1;
     built_ipopt_tol_ = -1.0;
-    //碰撞参数（中心距口径，不扣半径）
-    d_safe_ca = 0.75; //编队内硬安全距离
-    q_ca = 1.6;       //机间避碰势垒参数 (m)
-    Wc = 200;         //相互碰撞权重（对数势垒）
+    // 机间避碰 softplus 势垒参数（有效间距口径 = 中心距 − 2r）
+    d_safe_ca = 0.75; // 编队内安全距离下限 L (m)，softplus 下参与 d_scale 归一化
+    d_act_ca = 1.6;   // 机间避碰势垒中心距离 D̄ (m)，即 softplus 的 d_bar
+    k_ca_ = 100;      // 机间避碰 softplus 陡度参数 k
+    Wc = 200;         // 相互碰撞权重 M（softplus 势垒）
     //反步法控制器增益参数
     k1 = DM::diag(DM({7, 7, 7, 6}));
     k2 = DM::diag(DM({2, 2, 2, 2}));
@@ -481,10 +483,12 @@ MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
 
     MX pos = current_states(Slice(0, 3));       // 世界系位置
 
-    // softplus 势垒：H = M * softplus(k * (D̄ - d_eff))
-    // d_eff 为有效距离（扣无人机半径），D̄=detect_range_ 为势垒中心距离。
-    // 处处可导：远距离时惩罚渐近趋于 0，d_eff -> 0 时惩罚线性增长且梯度
-    // 有界，避免对数势垒在安全距离附近导数极大导致的求解失败。
+    // softplus 势垒：H = (M/d_scale)·softplus(k·(D̄ - d_eff))
+    // d_eff 为有效距离（扣无人机半径），D̄=detect_range_ 为势垒中心距离，
+    // d_scale = max(d_eff - L, 0.01)，L=safe_dist_ 为有效距离下限。
+    // 处处可导：远距离时惩罚渐近趋于 0，d_eff -> L 时 d_scale 截断为 0.01，
+    // 近距惩罚大幅抬升且梯度有界，避免对数势垒在安全距离附近导数极大导致
+    // 的求解失败。
     for (int m = 0; m < nearest_obs_num_; ++m) {
         MX o = obstacle_k(Slice(3 * m, 3 * m + 3));
         MX d_eff = MX::norm_2(pos - o) - drone_radius_;
@@ -566,13 +570,19 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
     MX pos_i = current_states(Slice(0, 3));
     MX H_ca = 0.0;
 
+    // 机间避碰 softplus 势垒（与静态避障同形式）：
+    //   H = (Wc/d_scale)·softplus(k_ca·(D̄ - d_eff))
+    // d_eff 为有效间距（中心距 − 2·r_drone），D̄=d_act_ca 为势垒中心距离，
+    // d_scale = max(d_eff - L, 0.01)，L=d_safe_ca 为安全距离下限。
+    // 处处可导、无硬边界、近距惩罚抬升且梯度有界，替代 q_ca 对数势垒，
+    // 避免机间距离逼近安全下限时势垒梯度剧变导致的求解失败/振荡。
     for (auto const& [j_id, j_param] : neighbor_params) {
         MX y_j = j_param(Slice(0, 4), k_step);
         MX pos_j = y_j(Slice(0, 3));
 
-        MX dist = MX::norm_2(pos_i - pos_j) - (2 * drone_radius_); // 有效间距
-        MX d_c = MX::fmax(dist, d_safe_ca + 1e-15);
-        MX h_ca = Wc * log(1 + (q_ca - d_safe_ca) / (d_c - d_safe_ca));
+        MX d_eff = MX::norm_2(pos_i - pos_j) - (2 * drone_radius_); // 有效间距
+        MX d_scale = MX::fmax(d_eff - d_safe_ca, 1e-2);
+        MX h_ca = (Wc / d_scale) * stableSoftplus(k_ca_ * (d_act_ca - d_eff));
         H_ca += h_ca;
     }
     return H_ca;
@@ -715,7 +725,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
         std::abs(built_k_oa_ - k_oa_) < 1e-9 &&
         built_dyn_obs_count_ == dyn_obs.size() &&
         std::abs(built_d_safe_ca_ - d_safe_ca) < 1e-9 &&
-        std::abs(built_q_ca_ - q_ca) < 1e-9 &&
+        std::abs(built_d_act_ca_ - d_act_ca) < 1e-9 &&
+        std::abs(built_k_ca_ - k_ca_) < 1e-9 &&
         built_ipopt_max_iter_ == ipopt_max_iter_ &&
         std::abs(built_ipopt_tol_ - ipopt_tol_) < 1e-12) {
         return true;
@@ -857,7 +868,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
     built_k_oa_ = k_oa_;
     built_dyn_obs_count_ = dyn_obs.size();
     built_d_safe_ca_ = d_safe_ca;
-    built_q_ca_ = q_ca;
+    built_d_act_ca_ = d_act_ca;
+    built_k_ca_ = k_ca_;
     built_ipopt_max_iter_ = ipopt_max_iter_;
     built_ipopt_tol_ = ipopt_tol_;
     has_last_solution_ = false;

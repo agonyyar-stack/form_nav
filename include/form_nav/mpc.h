@@ -94,14 +94,15 @@ private: //存储了 MPC 算法运行时的配置和状态
     KdTreeMap* kd_tree_ptr_;   // 指向障碍物 KD-tree 的指针 (外部管理生命周期)
     int nearest_obs_num_;      // 每个预测步查询的最近障碍点数量 M
     double drone_radius_;      // 无人机半径 (m)，有效距离 = ||p-o|| - r_drone
-    double safe_dist_;         // 已弃用：softplus 下不再参与代价（保留兼容）
+    double safe_dist_;         // 有效距离下限 L (m)，softplus 下参与 d_scale 归一化
     double detect_range_;      // 势垒中心距离 D̄ (m)，即 softplus 的 d_bar
     int replan_max_iter_;      // 最近点重查询重规划的最大迭代次数
 
-    //碰撞参数
-    double d_safe_ca; // 编队内硬安全距离（中心距口径）
-    double q_ca;      // 机间避碰势垒参数 q_ca (m)
-    double Wc;        // 相互碰撞权重
+    // 机间避碰 softplus 势垒：与静态避障同形式，H = (M/d_scale)·softplus(k·(D̄-d_eff))
+    double d_safe_ca; // 编队内安全距离下限 L (m，有效间距口径)，softplus 下参与 d_scale 归一化
+    double d_act_ca;  // 机间避碰势垒中心距离 D̄ (m)，即 softplus 的 d_bar
+    double k_ca_;     // 机间避碰 softplus 陡度参数 k（默认 100，越大过渡越陡）
+    double Wc;        // 相互碰撞权重 M
 
     MX X; //状态变量
     MX U; //控制变量
@@ -137,7 +138,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     double built_k_oa_;
     size_t built_dyn_obs_count_;
     double built_d_safe_ca_;
-    double built_q_ca_;
+    double built_d_act_ca_;
+    double built_k_ca_;
     int built_ipopt_max_iter_;
     int ipopt_max_iter_;  // IPOPT 最大迭代次数（可调，避障势垒陡峭时可加大）
     double built_ipopt_tol_;
@@ -211,10 +213,13 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setDynamicObstacleBarrierDistance(double d) { d_bar_dyn_ = d; }
     /// 设置动态障碍物 softplus 陡度 k
     void setDynamicObstacleSteepness(double k) { k_dyn_ = k; }
-    /// 设置编队内硬安全距离 (m)
+    /// 设置编队内安全距离下限 L (m，有效间距口径)
     void setCollisionSafeDistance(double d) { d_safe_ca = d; }
-    void setCollisionBarrierQ(double q) { q_ca = q; }
-    /// 设置相互碰撞惩罚权重
+    /// 设置机间避碰势垒中心距离 (m，即 softplus 的 d_bar)
+    void setCollisionActivationRange(double d) { d_act_ca = d; }
+    /// 设置机间避碰 softplus 陡度参数 k（须为正）
+    void setCollisionSoftplusK(double k) { k_ca_ = k; }
+    /// 设置相互碰撞惩罚权重 M
     void setCollisionWeight(double w) { Wc = w; }
     /// 设置控制输入惩罚权重 (对角矩阵，原 F_)
     void setControlInputWeight(const DM& w) { F_ = w; }
@@ -231,7 +236,7 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setNearestObstacleNum(int num) { nearest_obs_num_ = num; }
     /// 设置无人机半径 (m)
     void setDroneRadius(double r) { drone_radius_ = r; }
-    /// 设置对数避障势垒的最小安全距离 (m，有效距离口径)
+    /// 设置避障有效距离下限 L (m)，softplus 下参与 d_scale 归一化
     void setSafeDistance(double d) { safe_dist_ = d; }
     /// 设置静态避障势垒中心距离 (m，即 softplus 的 d_bar)
     void setDetectionRange(double d) { detect_range_ = d; }

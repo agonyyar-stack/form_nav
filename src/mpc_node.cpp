@@ -863,7 +863,8 @@ int main(int argc, char **argv) {
     double u_max = nh_private.param<double>("mpc/u_max", 6.0);
     double w_max = nh_private.param<double>("mpc/w_max", 2.0);
     double d_safe_ca = nh_private.param<double>("mpc/d_safe_ca", 0.75);
-    double q_ca      = nh_private.param<double>("mpc/q_ca", 1.6);
+    double d_act_ca  = nh_private.param<double>("mpc/d_act_ca", 1.6);
+    double k_ca      = nh_private.param<double>("mpc/k_ca", 100.0);
     double w_ca      = nh_private.param<double>("mpc/w_ca", 200.0);
     double w_form    = nh_private.param<double>("mpc/w_form", 2000.0);
     double w_subgoal = nh_private.param<double>("mpc/w_subgoal", 20000.0);
@@ -916,6 +917,9 @@ int main(int argc, char **argv) {
     if (!std::isfinite(k_oa) || k_oa <= 0.0) {
         throw std::runtime_error("mpc/k_oa must be positive");
     }
+    if (!std::isfinite(k_ca) || k_ca <= 0.0) {
+        throw std::runtime_error("mpc/k_ca must be positive");
+    }
     if (!std::isfinite(m_dyn) || m_dyn < 0.0) {
         throw std::runtime_error("mpc/w_dyn must be non-negative");
     }
@@ -928,9 +932,9 @@ int main(int argc, char **argv) {
     if (!std::isfinite(d_safe_ca) || d_safe_ca < 0.0) {
         throw std::runtime_error("mpc/d_safe_ca must be non-negative");
     }
-    if (!std::isfinite(q_ca) || q_ca <= d_safe_ca) {
+    if (!std::isfinite(d_act_ca) || d_act_ca <= d_safe_ca) {
         throw std::runtime_error(
-            "mpc/q_ca must be finite and greater than mpc/d_safe_ca");
+            "mpc/d_act_ca must be finite and greater than mpc/d_safe_ca");
     }
     if (!std::isfinite(w_ca) || w_ca < 0.0) {
         throw std::runtime_error("mpc/w_ca must be non-negative");
@@ -1041,7 +1045,8 @@ int main(int argc, char **argv) {
     mpc_ptr->setIpoptMaxIter(ipopt_max_iter);
     mpc_ptr->setIpoptTol(ipopt_tol);
     mpc_ptr->setCollisionSafeDistance(d_safe_ca);
-    mpc_ptr->setCollisionBarrierQ(q_ca);
+    mpc_ptr->setCollisionActivationRange(d_act_ca);
+    mpc_ptr->setCollisionSoftplusK(k_ca);
     mpc_ptr->setCollisionWeight(w_ca);
     mpc_ptr->setLookaheadDistance(lookahead_distance);
     mpc_ptr->setYawLockDistance(yaw_lock_dist);
@@ -1066,7 +1071,7 @@ int main(int argc, char **argv) {
         DM::diag(DM{w_subgoal, w_subgoal, w_subgoal / 2.0, w_yaw}));
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
-             "d_safe_ca=%.2f, q_ca=%.2f, w_ca=%.2f, "
+             "d_safe_ca=%.2f, d_act_ca=%.2f, k_ca=%.2f, w_ca=%.2f, "
              "w_form=%.2f, w_subgoal=%.2f, w_yaw=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
              "k_oa=%.2f, detect_range=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
@@ -1076,7 +1081,7 @@ int main(int argc, char **argv) {
              "w_dyn=%.2f, d_bar_dyn=%.2f, k_dyn=%.2f, "
              "z_min=%.2f, z_max=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_ca, q_ca, w_ca, w_form, w_subgoal, w_yaw,
+             d_safe_ca, d_act_ca, k_ca, w_ca, w_form, w_subgoal, w_yaw,
              nearest_obs_num, drone_radius, w_oa,
              k_oa, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,

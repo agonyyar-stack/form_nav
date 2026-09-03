@@ -41,8 +41,15 @@
   softplus 势垒（2026-09-03 起与 compare/safe-softpus 分支一致）
   `H_oa = Σ (Wo/d_scale)·softplus(k_oa·(D̄−d_eff))`，其中
   `d_eff = ||p−o|| − r_drone`（扣无人机半径），`D̄=detect_range_` 为势垒中心距离，
-  `d_scale = max(d_eff−0.1, 0.01)`；处处可导、无硬边界，靠近障碍时惩罚
-  线性增长且梯度有界，替代旧的死区对数势垒；另设近距兜底悬停（`hold_dist`）。
+  `d_scale = max(d_eff − safe_dist, 0.01)`（`safe_dist` 为有效距离下限 L，
+  launch 默认 0.1 m，距离下限处截断为 0.01 使近距惩罚快速抬升）；处处可导、
+  无硬边界、靠近障碍时惩罚增大且梯度有界，替代旧的死区对数势垒；
+  另设近距兜底悬停（`hold_dist`）。
+- 机间避碰（2026-09-03 起与静态避障同形式）：邻居预测轨迹按求解时间网格对齐后
+  作为参数参与优化；`d_eff = ||p_i−p_j|| − 2·r_drone`（有效间距），
+  `H_ca = Σ (Wc/d_scale)·softplus(k_ca·(d_act_ca−d_eff))`，
+  `d_scale = max(d_eff − d_safe_ca, 0.01)`；launch 默认 `w_ca=20`、
+  `d_safe_ca=0.2 m`、`d_act_ca=1.0 m`、`k_ca=1.0`。
 - 动态障碍避碰（2026-08-31 更新：点-折线最短距离；2026-09-02 更新：softplus
   势垒）：动态障碍物（圆柱/球体）轨迹已知（仿真阶段由 `random_obs` 按解析轨迹
   发布 ground truth），MPC 单独维护动态障碍物表，按求解时间网格对齐后作为参数
@@ -84,15 +91,23 @@
   `Wo·log(1 + (q_oa−L)/(d_c−L))` 改为与 compare/safe-softpus 分支相同的
   softplus 形式 `(Wo/d_scale)·softplus(k_oa·(D̄−d_eff))`，参数键名
   `q_oa` → `detect_range`（D̄，launch 默认 0.8 m）+ `k_oa`（陡度，默认 1.0）；
-  `safe_dist` 保留但已弃用。原因同动态障碍物：旧对数势垒在安全距离附近导数
-  极大，狭窄走廊易导致求解失败/振荡；softplus 处处光滑、梯度有界。
+  `safe_dist`（有效距离下限 L）参数化 `d_scale = max(d_eff − L, 0.01)`，
+  解决距离下限处截断代价不够大的问题。原因同动态障碍物：旧对数势垒在安全距离
+  附近导数极大，狭窄走廊易导致求解失败/振荡；softplus 处处光滑、梯度有界。
+- 2026-09-03：编队内机间距离惩罚由对数势垒
+  `Wc·log(1 + (q_ca−L)/(d_c−L))` 改为与静态避障相同的 softplus 形式
+  `(Wc/d_scale)·softplus(k_ca·(d_act_ca−d_eff))`（`d_eff=||p_i−p_j||−2r_drone`，
+  `d_scale = max(d_eff − d_safe_ca, 0.01)`）；参数键名 `q_ca` → `d_act_ca`
+  （D̄，launch 默认 1.0 m）+ 新增 `k_ca`（陡度，默认 1.0）。原因同静态避障：
+  对数势垒在安全下限附近梯度剧变，机间接近时易导致求解失败/振荡；softplus
+  处处光滑、近距惩罚抬升且梯度有界。
 
 ## MPC 代价惩罚项（当前）
 
-- 障碍物距离惩罚（softplus 势垒，`w_oa`/`k_oa`/`detect_range`）
+- 障碍物距离惩罚（softplus 势垒，`w_oa`/`k_oa`/`detect_range`/`safe_dist`）
 - 动态障碍物距离惩罚（已知轨迹 + 点-折线最短距离 + 形状感知 softplus 势垒，
   `m_dyn`/`d_bar_dyn`/`k_dyn`）
-- 编队内机间距离惩罚（对数势垒）
+- 编队内机间距离惩罚（softplus 势垒，`w_ca`/`d_act_ca`/`k_ca`/`d_safe_ca`）
 - 控制输入惩罚（速度指令，`w_u`）
 - 控制增量惩罚（`w_du`，抑制指令抖动）
 - 子目标距离惩罚（终端，`w_subgoal`）
