@@ -871,8 +871,9 @@ int main(int argc, char **argv) {
     int nearest_obs_num = nh_private.param<int>("mpc/nearest_obs_num", 3);
     double drone_radius = nh_private.param<double>("mpc/drone_radius", 0.35);
     double safe_dist    = nh_private.param<double>("mpc/safe_dist", 0.5);
-    double q_oa         = nh_private.param<double>("mpc/q_oa", 2.5);
-    double w_oa         = nh_private.param<double>("mpc/w_oa", 30000.0);
+    double detect_range = nh_private.param<double>("mpc/detect_range", 0.6);
+    double w_oa         = nh_private.param<double>("mpc/w_oa", 100.0);
+    double k_oa         = nh_private.param<double>("mpc/k_oa", 100.0);
     int replan_max_iter = nh_private.param<int>("mpc/replan_max_iter", 0);
     kd_tree_voxel_size  = nh_private.param<double>("mpc/kd_tree_voxel_size", 0.1);
     kd_tree_update_interval =
@@ -911,6 +912,9 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(w_u) || w_u < 0.0) {
         throw std::runtime_error("mpc/w_u must be non-negative");
+    }
+    if (!std::isfinite(k_oa) || k_oa <= 0.0) {
+        throw std::runtime_error("mpc/k_oa must be positive");
     }
     if (!std::isfinite(m_dyn) || m_dyn < 0.0) {
         throw std::runtime_error("mpc/w_dyn must be non-negative");
@@ -971,9 +975,9 @@ int main(int argc, char **argv) {
     if (!std::isfinite(safe_dist) || safe_dist <= 0.0) {
         throw std::runtime_error("mpc/safe_dist must be positive");
     }
-    if (!std::isfinite(q_oa) || q_oa <= safe_dist) {
+    if (!std::isfinite(detect_range) || detect_range <= safe_dist) {
         throw std::runtime_error(
-            "mpc/q_oa must be greater than mpc/safe_dist");
+            "mpc/detect_range must be greater than mpc/safe_dist");
     }
     if (!std::isfinite(w_oa) || w_oa < 0.0) {
         throw std::runtime_error("mpc/w_oa must be non-negative");
@@ -1025,13 +1029,14 @@ int main(int argc, char **argv) {
     mpc_ptr->setMaxVelocity(u_max);
     mpc_ptr->setMaxAngularVelocity(w_max);
     mpc_ptr->setObstacleWeight(w_oa);
+    mpc_ptr->setObstacleSoftplusK(k_oa);
     mpc_ptr->setDynamicObstacleWeight(m_dyn);
     mpc_ptr->setDynamicObstacleBarrierDistance(d_bar_dyn);
     mpc_ptr->setDynamicObstacleSteepness(k_dyn);
     mpc_ptr->setNearestObstacleNum(nearest_obs_num);
     mpc_ptr->setDroneRadius(drone_radius);
     mpc_ptr->setSafeDistance(safe_dist);
-    mpc_ptr->setObstacleBarrierQ(q_oa);
+    mpc_ptr->setDetectionRange(detect_range);
     mpc_ptr->setReplanMaxIter(replan_max_iter);
     mpc_ptr->setIpoptMaxIter(ipopt_max_iter);
     mpc_ptr->setIpoptTol(ipopt_tol);
@@ -1063,7 +1068,7 @@ int main(int argc, char **argv) {
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
              "d_safe_ca=%.2f, q_ca=%.2f, w_ca=%.2f, "
              "w_form=%.2f, w_subgoal=%.2f, w_yaw=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
-             "safe_dist=%.2f, q_oa=%.2f, "
+             "k_oa=%.2f, detect_range=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
              "lookahead=%.2f, yaw_lock_dist=%.2f, tau_v=%.2f, tau_w=%.2f, "
@@ -1073,7 +1078,7 @@ int main(int argc, char **argv) {
              UAV_NAME.c_str(), N, dt, u_max, w_max,
              d_safe_ca, q_ca, w_ca, w_form, w_subgoal, w_yaw,
              nearest_obs_num, drone_radius, w_oa,
-             safe_dist, q_oa, replan_max_iter,
+             k_oa, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
              lookahead_distance, yaw_lock_dist, tau_v, tau_w,

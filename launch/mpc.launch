@@ -35,11 +35,12 @@
         <param name="mpc/lookahead_distance" value="2.0" /> <!-- 滚动子目标前瞻距离 (m) -->
         <param name="mpc/yaw_lock_dist" value="0.3" />   <!-- 进入终点范围后冻结 yaw 参考的距离 (m) -->
 
-        <param name="mpc/w_oa" value="20.0" />            <!-- 静态避障权重 -->
-        <param name="mpc/drone_radius" value="0.3" />     <!-- 无人机半径 (m) -->
-        <param name="mpc/safe_dist" value="0.1" />        <!-- 最小安全距离 L (m)，扣除无人机半径 -->
-        <param name="mpc/q_oa" value="1.0" />
+        <param name="mpc/w_oa" value="5.0" />            <!-- 静态避障 softplus 势垒强度 M -->
+        <param name="mpc/k_oa" value="1.0" />            <!-- 静态避障 softplus 陡度参数 k -->
         <param name="mpc/nearest_obs_num" value="3" />    <!-- 每步查询最近障碍点数量 -->
+        <param name="mpc/drone_radius" value="0.3" />     <!-- 无人机半径 (m) -->
+        <param name="mpc/safe_dist" value="0.1" />       <!-- 距离下限(m) -->
+        <param name="mpc/detect_range" value="0.8" />     <!-- 静态障碍物势垒中心距离 d_bar (m)，扣除无人机半径 -->
         <param name="mpc/replan_max_iter" value="1" />    <!-- 最近点重查询重规划次数（查询点固定为参考，默认 0） -->
         <param name="mpc/hold_dist" value="0.35" />       <!-- 近距紧急悬停阈值 (m),考虑无人机半径，硬安全兜底 -->
 

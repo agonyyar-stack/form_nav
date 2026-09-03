@@ -55,8 +55,9 @@ Mpc::Mpc() {
     K_w_ = 1.0;     // 偏航角速度指令稳态增益（指令即真实 yaw rate，不再乘 π/180）
     updateDiscreteModel();
     // 编队偏移量由外部 setFormationOffsets() 注入，默认自身偏移为 [0,0,0,0]
-    // KD-tree 对数势垒避障权重
-    Wo = 50000;            // 障碍物避障权重 (标量)
+    // KD-tree 静态避障 softplus 势垒：H = M·softplus(k·(D̄-d_eff))
+    Wo = 100;              // 势垒强度 M (标量)
+    k_oa_ = 100;           // 势垒陡度参数 k
     // 动态障碍物避障（已知轨迹 + 形状感知 softplus 势垒）
     M_dyn_ = 50;           // softplus 势垒强度 M (标量)
     d_bar_dyn_ = 1.5;      // softplus 势垒中心距离 d_bar (m，有效距离口径)
@@ -65,8 +66,8 @@ Mpc::Mpc() {
     kd_tree_ptr_ = nullptr;   // 障碍物 KD-tree 指针，由外部设置
     nearest_obs_num_ = 3;     // 每个预测步查询的最近障碍点数量
     drone_radius_ = 0.35;     // 无人机半径 (m)
-    safe_dist_ = 0.5;         // 对数势垒最小安全距离 L (m，有效距离口径)
-    q_oa_ = 2.5;              // 静态避障势垒参数 (m)
+    safe_dist_ = 0.5;         // 已弃用：softplus 下不再参与代价（保留兼容）
+    detect_range_ = 0.6;      // 势垒中心距离 D̄ (m)，即 softplus 的 d_bar
     replan_max_iter_ = 2;     // 最近点重查询重规划最大迭代次数
     ipopt_max_iter_ = 100;    // IPOPT 最大迭代次数
     ipopt_tol_ = 1e-6;        // IPOPT 收敛容差
@@ -82,8 +83,9 @@ Mpc::Mpc() {
     built_K_w_ = -1.0;
     built_neighbor_count_ = 0;
     built_nearest_obs_num_ = -1;
-    built_q_oa_ = -1.0;
+    built_detect_range_ = -1.0;
     built_safe_dist_ = -1.0;
+    built_k_oa_ = -1.0;
     built_dyn_obs_count_ = 0;
     built_d_safe_ca_ = -1.0;
     built_q_ca_ = -1.0;
@@ -472,18 +474,22 @@ MX Mpc::ViLmpcDot(int k_step, MX reference_state, std::map<int, MX>& neighbor_pa
 
 MX Mpc::kdtreeObstacleAvoidance(MX current_states, MX obstacle_k) {
     MX H_oa = MX(0.0);
-    if (kd_tree_ptr_ == nullptr || kd_tree_ptr_->empty() ||
-        q_oa_ <= safe_dist_) {
+    if (kd_tree_ptr_ == nullptr || kd_tree_ptr_->empty()) {
+        // 无 KD-tree 数据时返回零惩罚（与 ESDF 缺数据时行为一致）
         return H_oa;
     }
 
     MX pos = current_states(Slice(0, 3));       // 世界系位置
 
+    // softplus 势垒：H = M * softplus(k * (D̄ - d_eff))
+    // d_eff 为有效距离（扣无人机半径），D̄=detect_range_ 为势垒中心距离。
+    // 处处可导：远距离时惩罚渐近趋于 0，d_eff -> 0 时惩罚线性增长且梯度
+    // 有界，避免对数势垒在安全距离附近导数极大导致的求解失败。
     for (int m = 0; m < nearest_obs_num_; ++m) {
         MX o = obstacle_k(Slice(3 * m, 3 * m + 3));
         MX d_eff = MX::norm_2(pos - o) - drone_radius_;
-        MX d_c = MX::fmax(d_eff, safe_dist_ + 1e-15);
-        MX term = Wo * log(1 + (q_oa_ - safe_dist_) / (d_c - safe_dist_));
+        MX d_scale = MX::fmax(d_eff - safe_dist_, 1e-2);
+        MX term = (Wo / d_scale) * stableSoftplus(k_oa_ * (detect_range_ - d_eff));
         H_oa += term;
     }
     return H_oa;
@@ -704,8 +710,9 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
         std::abs(built_K_w_ - K_w_) < 1e-9 &&
         built_neighbor_count_ == neighbors.size() &&
         built_nearest_obs_num_ == nearest_obs_num_ &&
-        std::abs(built_q_oa_ - q_oa_) < 1e-9 &&
+        std::abs(built_detect_range_ - detect_range_) < 1e-9 &&
         std::abs(built_safe_dist_ - safe_dist_) < 1e-9 &&
+        std::abs(built_k_oa_ - k_oa_) < 1e-9 &&
         built_dyn_obs_count_ == dyn_obs.size() &&
         std::abs(built_d_safe_ca_ - d_safe_ca) < 1e-9 &&
         std::abs(built_q_ca_ - q_ca) < 1e-9 &&
@@ -845,8 +852,9 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
     built_K_w_ = K_w_;
     built_neighbor_count_ = neighbors.size();
     built_nearest_obs_num_ = nearest_obs_num_;
-    built_q_oa_ = q_oa_;
+    built_detect_range_ = detect_range_;
     built_safe_dist_ = safe_dist_;
+    built_k_oa_ = k_oa_;
     built_dyn_obs_count_ = dyn_obs.size();
     built_d_safe_ca_ = d_safe_ca;
     built_q_ca_ = q_ca;

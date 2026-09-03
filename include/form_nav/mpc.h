@@ -76,8 +76,9 @@ private: //存储了 MPC 算法运行时的配置和状态
     double T_switch;
     double delta;
 
-    // KD-tree 对数势垒避障权重
-    double Wo;             // 障碍物避障权重 (标量)
+    // KD-tree 静态避障 softplus 势垒：H = M·softplus(k·(D̄-d_eff))
+    double Wo;             // 势垒强度 M (标量)
+    double k_oa_;          // 势垒陡度参数 k（默认 100，越大过渡越陡）
 
     // 动态障碍物避障（已知轨迹 + 形状感知 softplus 势垒）
     double M_dyn_;         // softplus 势垒强度 M（标量，默认 50）
@@ -93,8 +94,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     KdTreeMap* kd_tree_ptr_;   // 指向障碍物 KD-tree 的指针 (外部管理生命周期)
     int nearest_obs_num_;      // 每个预测步查询的最近障碍点数量 M
     double drone_radius_;      // 无人机半径 (m)，有效距离 = ||p-o|| - r_drone
-    double safe_dist_;         // 最小安全距离 L (m)，有效距离口径（扣无人机半径）
-    double q_oa_;              // 静态避障势垒参数 q_oa (m)，须大于 safe_dist_
+    double safe_dist_;         // 已弃用：softplus 下不再参与代价（保留兼容）
+    double detect_range_;      // 势垒中心距离 D̄ (m)，即 softplus 的 d_bar
     int replan_max_iter_;      // 最近点重查询重规划的最大迭代次数
 
     //碰撞参数
@@ -131,8 +132,9 @@ private: //存储了 MPC 算法运行时的配置和状态
     double built_K_w_;
     size_t built_neighbor_count_;
     int built_nearest_obs_num_;
-    double built_q_oa_;
+    double built_detect_range_;
     double built_safe_dist_;
+    double built_k_oa_;
     size_t built_dyn_obs_count_;
     double built_d_safe_ca_;
     double built_q_ca_;
@@ -199,8 +201,10 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setVelocityTimeConstant(double tau) { tau_v_ = tau > 0.0 ? tau : 0.8; updateDiscreteModel(); }
     /// 设置偏航角速度一阶时间常数 (s)，<=0 时恢复默认 0.5
     void setYawTimeConstant(double tau) { tau_w_ = tau > 0.0 ? tau : 0.5; updateDiscreteModel(); }
-    /// 设置 KD-tree 对数势垒避障权重
+    /// 设置 KD-tree 静态避障 softplus 势垒强度 M
     void setObstacleWeight(double w) { Wo = w; }
+    /// 设置 KD-tree 静态避障 softplus 陡度参数 k（须为正）
+    void setObstacleSoftplusK(double k) { k_oa_ = k; }
     /// 设置动态障碍物 softplus 势垒强度 M
     void setDynamicObstacleWeight(double M) { M_dyn_ = M; }
     /// 设置动态障碍物 softplus 势垒中心距离 d_bar (m，有效距离口径)
@@ -229,7 +233,8 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setDroneRadius(double r) { drone_radius_ = r; }
     /// 设置对数避障势垒的最小安全距离 (m，有效距离口径)
     void setSafeDistance(double d) { safe_dist_ = d; }
-    void setObstacleBarrierQ(double q) { q_oa_ = q; }
+    /// 设置静态避障势垒中心距离 (m，即 softplus 的 d_bar)
+    void setDetectionRange(double d) { detect_range_ = d; }
     /// 设置最近点重查询重规划的最大迭代次数
     void setReplanMaxIter(int iter) { replan_max_iter_ = iter; }
     /// 设置 IPOPT 最大迭代次数
