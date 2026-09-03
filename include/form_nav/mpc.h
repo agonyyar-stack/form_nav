@@ -84,6 +84,11 @@ private: //存储了 MPC 算法运行时的配置和状态
     double d_bar_dyn_;     // softplus 势垒中心距离 d_bar (m，有效距离口径，默认 1.5)
     double k_dyn_;         // softplus 陡度 k（默认 10，量纲 1/m）
 
+    // 高度硬约束（暂无地面/天花板模型时的兜底）：
+    //   所有 N+1 个预测状态 z_k ∈ [z_min_, z_max_]
+    double z_min_;         // 高度下界 (m，默认 0.5)
+    double z_max_;         // 高度上界 (m，默认 2.8)
+
     // KD-tree 静态避障参数（第三步）
     KdTreeMap* kd_tree_ptr_;   // 指向障碍物 KD-tree 的指针 (外部管理生命周期)
     int nearest_obs_num_;      // 每个预测步查询的最近障碍点数量 M
@@ -108,6 +113,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     MX dyn_obs_seg_param_;                      // 动态障碍物最近线段端点参数 (6*C, N_+1)
     MX dyn_obs_shape_param_;                    // 动态障碍物形状参数 (3, C) [shape, radius, height]
     MX goal_param_;                             // 终点位置参数 (3, 1)，用于制动约束
+    MX z_min_param_;                            // 高度下界参数 (1, 1)，运行时可调无需重建 Opti
+    MX z_max_param_;                            // 高度上界参数 (1, 1)
     std::map<int, MX> neighbor_params_;         // 邻居预测轨迹参数
     bool has_last_solution_;                    // 是否已有上一轮解（用于热启动）
     Eigen::MatrixXd last_pred_x_;               // 上一轮预测状态 (8, N_+1)
@@ -179,6 +186,10 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setMaxVelocity(double u_max) { u_max_ = u_max; u_min_ = -u_max; }
     /// 设置偏航角速度指令上限 (rad/s)，自动更新下限
     void setMaxAngularVelocity(double w_max) { w_max_ = w_max; w_min_ = -w_max; }
+    /// 设置高度硬约束下界 (m)；上下限为 Opti 参数，下一次 solve() 即生效
+    void setAltitudeMin(double z) { z_min_ = z; }
+    /// 设置高度硬约束上界 (m)
+    void setAltitudeMax(double z) { z_max_ = z; }
     /// 设置滚动子目标前瞻距离 (m)
     void setLookaheadDistance(double d) { lookahead_distance_ = d; }
     /// 设置终点 yaw 冻结距离 (m)：距全局终点小于该值时保持机头方向，

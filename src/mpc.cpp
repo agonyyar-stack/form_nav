@@ -34,6 +34,9 @@ Mpc::Mpc() {
     w_max_ = 2; //偏航角速度指令上限 (rad/s)
     u_min_ = - u_max_;
     w_min_ = - w_max_;
+    // 高度硬约束默认范围（上下限为 Opti 参数，可在节点/launch 覆盖）
+    z_min_ = 0.5;  // 高度下界 (m)
+    z_max_ = 2.8;  // 高度上界 (m)
     //权重矩阵Q,F
     Q_ = DM::diag(DM{20000, 20000, 10000, 100}); // 滚动子目标惩罚权重（可由 mpc/w_subgoal 覆盖）
     F_ = DM::diag(DM{100, 100, 100, 100});       // 控制输入惩罚
@@ -810,6 +813,16 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
     opti_->subject_to(u_min_ <= U(2, all) <= u_max_);
     opti_->subject_to(w_min_ <= U(3, all) <= w_max_);
 
+    // 高度硬约束：限制所有 N+1 个预测状态 z_min_ <= z_k <= z_max_，
+    // 防止避障优化钻到地下或飞到很高处（当前无地面/天花板模型）。
+    // 上下界参数化：运行中修改 z_min_/z_max_ 后下一次 solve() 即生效，无需重建。
+    z_min_param_ = opti_->parameter(1, 1);
+    z_max_param_ = opti_->parameter(1, 1);
+    for (int k = 0; k <= N_; ++k) {
+        opti_->subject_to(z_min_param_ <= X(2, k));
+        opti_->subject_to(X(2, k) <= z_max_param_);
+    }
+
     // 求解器设置
     casadi::Dict solver_opts; //创建求解器选项
     solver_opts["expand"] = true; //展开表达式以加快求解速度
@@ -920,6 +933,10 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
     // 初始状态参数
     vector<double> cur_state_vec(current_states.data(), current_states.data() + 8);
     opti_->set_value(X_cur_param_, DM(cur_state_vec));
+
+    // 高度硬约束上下界参数（每次求解刷新，运行时可调）
+    opti_->set_value(z_min_param_, DM(z_min_));
+    opti_->set_value(z_max_param_, DM(z_max_));
 
     // 邻居轨迹参数
     for (const auto& nb : neighbors) {

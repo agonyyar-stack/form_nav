@@ -888,11 +888,13 @@ int main(int argc, char **argv) {
     double yaw_lock_dist             = nh_private.param<double>("mpc/yaw_lock_dist", 0.3);
     double tau_v                     = nh_private.param<double>("mpc/tau_v", 0.8);
     double tau_w                     = nh_private.param<double>("mpc/tau_w", 0.5);
+    double z_min                     = nh_private.param<double>("mpc/z_min", 0.5);
+    double z_max                     = nh_private.param<double>("mpc/z_max", 2.8);
     double arrival_distance          = nh_private.param<double>("mpc/arrival_distance", 0.1);
     double arrival_velocity          = nh_private.param<double>("mpc/arrival_velocity", 0.1);
     double w_u                       = nh_private.param<double>("mpc/w_u", 100.0);
     double w_du                      = nh_private.param<double>("mpc/w_du", 100.0);
-    double m_dyn                     = nh_private.param<double>("mpc/m_dyn", 50.0);
+    double m_dyn                     = nh_private.param<double>("mpc/w_dyn", 50.0);
     double d_bar_dyn                 = nh_private.param<double>("mpc/d_bar_dyn", 1.5);
     double k_dyn                     = nh_private.param<double>("mpc/k_dyn", 10.0);
     if (!std::isfinite(neighbor_timeout) || neighbor_timeout <= 0.0) {
@@ -911,7 +913,7 @@ int main(int argc, char **argv) {
         throw std::runtime_error("mpc/w_u must be non-negative");
     }
     if (!std::isfinite(m_dyn) || m_dyn < 0.0) {
-        throw std::runtime_error("mpc/m_dyn must be non-negative");
+        throw std::runtime_error("mpc/w_dyn must be non-negative");
     }
     if (!std::isfinite(d_bar_dyn) || d_bar_dyn < 0.0) {
         throw std::runtime_error("mpc/d_bar_dyn must be non-negative");
@@ -955,6 +957,10 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(tau_w) || tau_w <= 0.0) {
         throw std::runtime_error("mpc/tau_w must be positive");
+    }
+    if (!std::isfinite(z_min) || !std::isfinite(z_max) || z_min >= z_max) {
+        throw std::runtime_error(
+            "mpc/z_min and mpc/z_max must be finite and z_min < z_max");
     }
     if (nearest_obs_num <= 0) {
         throw std::runtime_error("mpc/nearest_obs_num must be positive");
@@ -1036,6 +1042,8 @@ int main(int argc, char **argv) {
     mpc_ptr->setYawLockDistance(yaw_lock_dist);
     mpc_ptr->setVelocityTimeConstant(tau_v);
     mpc_ptr->setYawTimeConstant(tau_w);
+    mpc_ptr->setAltitudeMin(z_min);
+    mpc_ptr->setAltitudeMax(z_max);
     tau_v_eff = tau_v;
     mpc_ptr->setControlInputWeight(
         DM::diag(DM{w_u, w_u, w_u, w_u}));
@@ -1060,7 +1068,8 @@ int main(int argc, char **argv) {
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
              "lookahead=%.2f, yaw_lock_dist=%.2f, tau_v=%.2f, tau_w=%.2f, "
              "arrival_dist=%.2f, arrival_vel=%.2f, "
-             "m_dyn=%.2f, d_bar_dyn=%.2f, k_dyn=%.2f",
+             "w_dyn=%.2f, d_bar_dyn=%.2f, k_dyn=%.2f, "
+             "z_min=%.2f, z_max=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
              d_safe_ca, q_ca, w_ca, w_form, w_subgoal, w_yaw,
              nearest_obs_num, drone_radius, w_oa,
@@ -1069,7 +1078,7 @@ int main(int argc, char **argv) {
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
              lookahead_distance, yaw_lock_dist, tau_v, tau_w,
              ARRIVAL_DISTANCE, ARRIVAL_VELOCITY,
-             m_dyn, d_bar_dyn, k_dyn);
+             m_dyn, d_bar_dyn, k_dyn, z_min, z_max);
 
     // 第三步：初始化 KD-tree 障碍物地图（静态避障）
     kd_tree_ptr.reset(new KdTreeMap());
