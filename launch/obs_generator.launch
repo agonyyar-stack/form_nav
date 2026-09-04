@@ -3,7 +3,7 @@
 <!-- 单独查看场景: roslaunch form_nav obs_generator.launch rviz:=true -->
 <launch>
   <arg name="scene_file"
-       default="$(find form_nav)/config/scenes/fixed_scene.yaml" />
+       default="$(find form_nav)/config/scenes/standard.yaml" />
   <arg name="pub_rate" default="10.0" />  <!-- 发布频率 (Hz) -->
   <arg name="dyn_obs_num" default="-1" /> <!-- -1=全部, 0=关闭, n>0=只取前 n 个 -->
   <arg name="rviz" default="false" />

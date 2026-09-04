@@ -8,9 +8,13 @@
   - 编辑动态障碍物：圆柱 / 球体（位置、大小、形状、轨迹方向与长度；
     仅直线往复运动，最大速度默认 1.5 m/s、可编辑）
   - 画布上点击/拖拽选择与移动障碍物，属性面板精确编辑
+  - 画布框选 / Ctrl 点选多选，右侧列表 Shift 范围 / Ctrl 逐个多选；
+    多选障碍物可整体拖动或组编辑共有参数
   - 时间滑条 + 播放：预览动态障碍物直线往复运动与扫掠区域
   - 冲突检查：静态-静态重叠、动态扫掠与静态相交、动态-动态扫掠重叠红色高亮
   - 保存/加载 YAML 场景文件（与 obs_generator 节点共用格式）
+  - 记住上次窗口大小、左右区域占比与最近打开的文件，重启自动恢复
+  - 数值输入框输入完成后按 Enter（或失焦）才生效，不随按键即时修改
   - 可选 --publish：以 ROS 节点方式实时发布当前场景（需先 source devel/setup.bash）
 
 用法：
@@ -25,9 +29,11 @@ import os
 import struct
 import sys
 
-from PyQt5.QtCore import QLineF, QPointF, QRectF, Qt, QTimer
+from PyQt5.QtCore import QLineF, QPointF, QRect, QRectF, QSettings, Qt, QTimer
 from PyQt5.QtGui import QBrush, QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QAbstractSpinBox,
     QAction,
     QApplication,
     QComboBox,
@@ -49,6 +55,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QRubberBand,
     QSlider,
     QSplitter,
     QVBoxLayout,
@@ -288,8 +295,39 @@ class SceneModel:
 COLOR_STATIC = QColor(80, 160, 220)
 COLOR_DYN = QColor(240, 150, 60)
 COLOR_COLLIDE = QColor(220, 40, 40)
+COLOR_SELECT = QColor(30, 160, 80)  # 多选高亮描边
 COLOR_SWEEP = QColor(240, 150, 60, 90)
 HANDLE_SIZE = 10.0  # 缩放手柄屏幕像素尺寸
+
+
+class CommitSpin(QDoubleSpinBox):
+    """数值输入框：输入过程中不即时写模型，按 Enter / 失焦 / 步进按钮才提交。
+    keyboardTracking=False：输入数字期间内部值不变，Enter 或焦点离开时才
+    valueChanged 一次；箭头/滚轮属于显式操作，变化即提交。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setKeyboardTracking(False)
+        self._mixed = False  # 组编辑中该字段所选值不一致，显示“多值”占位
+
+    def set_mixed(self, mixed):
+        """组编辑：各选中项取值不一致时清空文本并显示占位符（不显示误导数值）"""
+        self._mixed = bool(mixed)
+        le = self.lineEdit()
+        if self._mixed:
+            le.setPlaceholderText("多值")
+            le.setText("")
+            self.setButtonSymbols(QAbstractSpinBox.NoButtons)  # 多值时禁用箭头防误改
+        else:
+            le.setPlaceholderText("")
+            self.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
+
+    def set_value_silent(self, value):
+        """程序回填数值，不触发提交回调"""
+        blocked = self.blockSignals(True)
+        self.setValue(float(value))
+        self.set_mixed(False)
+        self.blockSignals(blocked)
 
 
 class SceneCanvas(QGraphicsView):
@@ -308,7 +346,12 @@ class SceneCanvas(QGraphicsView):
         self._edit_mode = None  # None | "move" | "resize"
         self._edit_key = None
         self._start_cursor_world = (0.0, 0.0)
-        self._start_center = (0.0, 0.0)
+        self._move_starts = []  # [(key, (x0, y0)), ...] 多选整体平移的每项起点
+        # 框选（矩形多选）状态
+        self._rubber = None
+        self._rubber_start_vp = None  # 按下时视口坐标
+        self._rubber_add = False      # True=追加到现有选择（Ctrl/Shift 框选）
+        self._rubber_active = False   # 是否已拖出有效选框
         self._resize_corner = 0
         self._resize_anchor = (0.0, 0.0)
         self._resize_center = (0.0, 0.0)
@@ -383,8 +426,10 @@ class SceneCanvas(QGraphicsView):
         for idx, s in enumerate(self.app.model.statics):
             key = ("static", s.oid)
             bad = key in colliding
-            color = COLOR_COLLIDE if bad else COLOR_STATIC
-            pen = QPen(color, 2.5 if bad else 1.5)
+            sel = key in self.app.selected_keys
+            color = COLOR_COLLIDE if bad else (COLOR_SELECT if sel
+                                               else COLOR_STATIC)
+            pen = QPen(color, 3.0 if (bad or sel) else 1.5)
             pen.setCosmetic(True)
             brush = QBrush(color.lighter(150))
             if s.shape == "cylinder":
@@ -412,14 +457,16 @@ class SceneCanvas(QGraphicsView):
             self._place_label(label, s.x, s.y)
             label.setData(0, key)
             self._scene.addItem(label)
-            if self.app.selected_key == key:
+            if sel and len(self.app.selected_keys) == 1:
                 self._add_handles(key)
 
         t = self.app.time
         for d in self.app.model.dynamics:
             key = ("dynamic", d.oid)
             bad = key in colliding
-            color = COLOR_COLLIDE if bad else COLOR_DYN
+            sel = key in self.app.selected_keys
+            color = COLOR_COLLIDE if bad else (COLOR_SELECT if sel
+                                               else COLOR_DYN)
             # 扫掠线段（半透明）
             rad = math.radians(d.direction_deg)
             ax = d.amplitude * math.cos(rad)
@@ -438,7 +485,7 @@ class SceneCanvas(QGraphicsView):
             item = QGraphicsEllipseItem(
                 QRectF(self.world_to_scene(px - r, py + r),
                        self.world_to_scene(px + r, py - r)))
-            pen_dyn = QPen(color, 2.5 if bad else 1.8)
+            pen_dyn = QPen(color, 3.0 if (bad or sel) else 1.8)
             pen_dyn.setCosmetic(True)
             item.setPen(pen_dyn)
             item.setBrush(QBrush(color.lighter(160)))
@@ -452,7 +499,7 @@ class SceneCanvas(QGraphicsView):
             self._place_label(label, px, py)
             label.setData(0, key)
             self._scene.addItem(label)
-            if self.app.selected_key == key:
+            if sel and len(self.app.selected_keys) == 1:
                 self._add_handles(key)
 
     def _place_label(self, label, wx, wy):
@@ -517,8 +564,9 @@ class SceneCanvas(QGraphicsView):
         不用 itemAt：cosmetic 笔宽会让线段命中区被放大数米。"""
         wx, wy = self._to_world(event.pos())
         scale = max(abs(self.transform().m11()), 1e-6)
-        if self.app.selected_key is not None:
-            key = self.app.selected_key
+        # 只有单选时才绘制/响应缩放手柄；多选整体编辑尺寸走属性面板
+        if len(self.app.selected_keys) == 1:
+            key = self.app.selected_keys[0]
             thr = (HANDLE_SIZE / 2.0 + 2.0) / scale
             for corner in range(4):
                 hx, hy = self._corner_world(key, corner)
@@ -541,12 +589,28 @@ class SceneCanvas(QGraphicsView):
                 hit = key
         return hit
 
+    def _begin_move(self, event):
+        """进入整体平移模式：记录当前所有选中项的各自起点"""
+        self._edit_mode = "move"
+        self._edit_key = None
+        self._start_cursor_world = self._to_world(event.pos())
+        self._move_starts = []
+        for key in self.app.selected_keys:
+            kind, oid = key
+            if kind == "static":
+                s = self.app.find_static(oid)
+                self._move_starts.append((key, (s.x, s.y)))
+            else:
+                d = self.app.find_dynamic(oid)
+                self._move_starts.append((key, (d.cx, d.cy)))
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self.app.panel.commit_pending()
             pick = self._pick(event)
             if pick is not None and pick[0] == "handle":
                 _, key, corner = pick
-                self.app.selected_key = key
+                self.app.select_only(key)
                 self.app.panel.refresh()
                 self.refresh()
                 self._edit_mode = "resize"
@@ -558,26 +622,37 @@ class SceneCanvas(QGraphicsView):
                 return
             if pick is not None:
                 key = pick
-                self.app.selected_key = key
-                self.app.panel.refresh()
-                self.refresh()
-                self._edit_mode = "move"
-                self._edit_key = key
-                self._start_cursor_world = self._to_world(event.pos())
-                kind, oid = key
-                if kind == "static":
-                    s = self.app.find_static(oid)
-                    self._start_center = (s.x, s.y)
+                if event.modifiers() & Qt.ControlModifier:
+                    # Ctrl+点击：逐个切换多选（点在未选中项上再拖动=整组移动）
+                    toggled_off = key in self.app.selected_keys
+                    if toggled_off:
+                        self.app.remove_from_selection(key)
+                    else:
+                        self.app.add_to_selection(key)
+                    self.app.refresh_all()
+                    if not toggled_off:
+                        self._begin_move(event)
                 else:
-                    d = self.app.find_dynamic(oid)
-                    self._start_center = (d.cx, d.cy)
+                    # 普通点击：点中已选中项保持整组选择，否则替换为单选，
+                    # 随后都可整体拖动
+                    if key not in self.app.selected_keys:
+                        self.app.select_only(key)
+                        self.app.refresh_all()
+                    self._begin_move(event)
                 event.accept()
                 return
-            # 空白处点击：取消选择
-            if self.app.selected_key is not None:
-                self.app.selected_key = None
+            # 空白处：无修饰键先取消选择；按住 Ctrl/Shift 准备追加框选
+            mods = event.modifiers()
+            self._rubber_add = bool(mods & (Qt.ControlModifier |
+                                            Qt.ShiftModifier))
+            if not self._rubber_add and self.app.selected_keys:
+                self.app.clear_selection()
                 self.app.panel.refresh()
                 self.refresh()
+            self._rubber_start_vp = event.pos()
+            self._rubber_active = False
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -585,16 +660,43 @@ class SceneCanvas(QGraphicsView):
             wx, wy = self._to_world(event.pos())
             dx = wx - self._start_cursor_world[0]
             dy = wy - self._start_cursor_world[1]
-            self.app.on_obstacle_moved(
-                self._edit_key, self._start_center[0] + dx,
-                self._start_center[1] + dy)
+            for key, (x0, y0) in self._move_starts:
+                self.app.set_obstacle_center(key, x0 + dx, y0 + dy)
+            # 单选时同步面板坐标；多选拖动期间面板保持组编辑状态
+            if len(self._move_starts) == 1:
+                key, (x0, y0) = self._move_starts[0]
+                if key[0] == "static":
+                    self.app.panel.set_field("x", x0 + dx)
+                    self.app.panel.set_field("y", y0 + dy)
+                else:
+                    self.app.panel.set_field("cx", x0 + dx)
+                    self.app.panel.set_field("cy", y0 + dy)
             self.refresh()
+            self.app.refresh_list()
+            self.app.update_collisions()
             event.accept()
             return
         if self._edit_mode == "resize" and event.buttons() & Qt.LeftButton:
             wx, wy = self._to_world(event.pos())
             self._apply_resize(wx, wy)
             self.refresh()
+            event.accept()
+            return
+        # 空白处拖出矩形选框
+        if (self._rubber_start_vp is not None and
+                event.buttons() & Qt.LeftButton):
+            cur = event.pos()
+            if not self._rubber_active:
+                if (cur - self._rubber_start_vp).manhattanLength() >= 6:
+                    self._rubber_active = True
+                    self._rubber = QRubberBand(QRubberBand.Rectangle,
+                                               self.viewport())
+                    self._rubber.setGeometry(
+                        QRect(self._rubber_start_vp, cur).normalized())
+                    self._rubber.show()
+            else:
+                self._rubber.setGeometry(
+                    QRect(self._rubber_start_vp, cur).normalized())
             event.accept()
             return
         # 悬停光标提示（几何拾取）
@@ -608,10 +710,66 @@ class SceneCanvas(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and \
+                self._rubber_start_vp is not None:
+            if self._rubber_active and self._rubber is not None:
+                keys = self._keys_in_viewport_rect(self._rubber.geometry())
+                if self._rubber_add:
+                    merged = list(self.app.selected_keys)
+                    for k in keys:
+                        if k not in merged:
+                            merged.append(k)
+                    self.app.selected_keys = merged
+                else:
+                    self.app.selected_keys = keys
+                self.app.refresh_all()
+            elif self._rubber_add:
+                # 空白处单击（无拖动）：取消选择
+                self.app.clear_selection()
+                self.app.panel.refresh()
+                self.refresh()
+            if self._rubber is not None:
+                self._rubber.hide()
+                self._rubber.deleteLater()
+                self._rubber = None
+            self._rubber_start_vp = None
+            self._rubber_active = False
+            self._rubber_add = False
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
         if self._edit_mode is not None:
             self._edit_mode = None
             self.app.refresh_all()
+
+    def _keys_in_viewport_rect(self, vp_rect):
+        """矩形框选：返回与世界系矩形相交的障碍物 key（按模型顺序）"""
+        w1 = self.scene_to_world(self.mapToScene(vp_rect.topLeft()))
+        w2 = self.scene_to_world(self.mapToScene(vp_rect.bottomRight()))
+        x0, x1 = sorted((w1[0], w2[0]))
+        y0, y1 = sorted((w1[1], w2[1]))
+        hits = []
+        for s in self.app.model.statics:
+            key = ("static", s.oid)
+            if s.shape == "cylinder":
+                if self._circle_hit_rect(s.x, s.y, s.radius, x0, x1, y0, y1):
+                    hits.append(key)
+            elif not (s.x + s.lx / 2.0 < x0 or s.x - s.lx / 2.0 > x1 or
+                      s.y + s.ly / 2.0 < y0 or s.y - s.ly / 2.0 > y1):
+                hits.append(key)
+        for d in self.app.model.dynamics:
+            key = ("dynamic", d.oid)
+            px, py = d.position(self.app.time)
+            if self._circle_hit_rect(px, py, d.radius, x0, x1, y0, y1):
+                hits.append(key)
+        return hits
+
+    @staticmethod
+    def _circle_hit_rect(cx, cy, r, x0, x1, y0, y1):
+        """圆心 (cx, cy) 半径 r 的圆与世界系轴对齐矩形是否相交"""
+        nx = min(max(cx, x0), x1)
+        ny = min(max(cy, y0), y1)
+        return (cx - nx) ** 2 + (cy - ny) ** 2 <= r * r
 
     def _store_resize_origin(self, key, corner):
         """记录缩放基准：矩形用对侧角锚点，圆形用圆心"""
@@ -681,15 +839,27 @@ class PropertyPanel(QWidget):
                 w.deleteLater()
         self._widgets.clear()
 
-    def _add_spin(self, label, key, value, lo, hi, step=0.1, readonly=False):
-        spin = QDoubleSpinBox()
+    def commit_pending(self):
+        """提交仍处于编辑态（已输入但未回车）的数值框，避免被重建丢弃"""
+        for w in list(self._widgets.values()):
+            if isinstance(w, CommitSpin) and w.lineEdit().isModified():
+                w.interpretText()
+                return True
+        return False
+
+    def _add_spin(self, label, key, value, lo, hi, step=0.1, readonly=False,
+                  mixed=False, commit=None):
+        spin = CommitSpin()
         spin.setRange(lo, hi)
         spin.setDecimals(3)
         spin.setSingleStep(step)
         spin.setValue(value)
+        if mixed:
+            spin.set_mixed(True)
         spin.setReadOnly(readonly)
-        spin.valueChanged.connect(
-            lambda v: self.app.on_property_changed(key, v))
+        cb = commit if commit is not None else \
+            (lambda v: self.app.on_property_changed(key, v))
+        spin.valueChanged.connect(cb)
         self._form.addRow(label, spin)
         self._widgets[key] = spin
 
@@ -705,8 +875,8 @@ class PropertyPanel(QWidget):
     def refresh(self):
         self._clear()
         app = self.app
-        key = app.selected_key
-        if key is None:
+        keys = list(app.selected_keys)
+        if not keys:
             self._title.setText("场景设置")
             sc = app.model.scene
             self._add_spin("左边缘 x", "left_x", sc["left_x"], -500, 500, 1.0)
@@ -718,6 +888,11 @@ class PropertyPanel(QWidget):
                            1.0, 0.05)
             return
 
+        if len(keys) > 1:
+            self._refresh_group(keys)
+            return
+
+        key = keys[0]
         kind, oid = key
         if kind == "static":
             s = app.find_static(oid)
@@ -748,25 +923,140 @@ class PropertyPanel(QWidget):
             self._add_spin("轨迹长度", "length", d.length, 0.2, 50, 0.1)
             self._add_spin("最大速度", "speed", d.speed_max, 0.1, 10, 0.1)
 
+    # ---- 多选组编辑：只显示全部选中项共有的字段 ----
+    def _refresh_group(self, keys):
+        app = self.app
+        kinds = {k[0] for k in keys}
+        n_static = sum(1 for k in keys if k[0] == "static")
+        self._title.setText("组编辑：已选 %d 个（%d 静 %d 动）" %
+                            (len(keys), n_static, len(keys) - n_static))
+
+        def add_row(label, key, getter, setter, lo, hi, step=0.1):
+            vals = [getter(k) for k in keys]
+            equal = all(abs(v - vals[0]) < 1e-9 for v in vals[1:])
+            self._add_spin(label, key, vals[0] if equal else 0.0, lo, hi,
+                           step, mixed=not equal,
+                           commit=lambda v: self._apply_group(keys, setter, v))
+
+        # 位置：静态中心 x/y 与动态运动中心 cx/cy 统一为“中心 x/y”
+        def get_x(k):
+            if k[0] == "static":
+                return app.find_static(k[1]).x
+            return app.find_dynamic(k[1]).cx
+
+        def set_x(k, v):
+            if k[0] == "static":
+                app.find_static(k[1]).x = v
+            else:
+                app.find_dynamic(k[1]).cx = v
+
+        def get_y(k):
+            if k[0] == "static":
+                return app.find_static(k[1]).y
+            return app.find_dynamic(k[1]).cy
+
+        def set_y(k, v):
+            if k[0] == "static":
+                app.find_static(k[1]).y = v
+            else:
+                app.find_dynamic(k[1]).cy = v
+
+        add_row("中心 x", "x", get_x, set_x, -500, 500, 0.1)
+        add_row("中心 y", "y", get_y, set_y, -500, 500, 0.1)
+
+        if kinds == {"static"}:
+            shapes = {app.find_static(k[1]).shape for k in keys}
+            if shapes == {"cuboid"}:
+                add_row("长度 lx", "lx",
+                        lambda k: app.find_static(k[1]).lx,
+                        lambda k, v: setattr(app.find_static(k[1]), "lx", v),
+                        0.1, 50, 0.1)
+                add_row("宽度 ly", "ly",
+                        lambda k: app.find_static(k[1]).ly,
+                        lambda k, v: setattr(app.find_static(k[1]), "ly", v),
+                        0.1, 50, 0.1)
+            elif shapes == {"cylinder"}:
+                add_row("半径", "radius",
+                        lambda k: app.find_static(k[1]).radius,
+                        lambda k, v: setattr(app.find_static(k[1]), "radius",
+                                             v),
+                        0.05, 20, 0.05)
+            if len(shapes) == 1:
+                add_row("高度", "h",
+                        lambda k: app.find_static(k[1]).h,
+                        lambda k, v: setattr(app.find_static(k[1]), "h", v),
+                        0.05, 50, 0.1)
+        elif kinds == {"dynamic"}:
+            add_row("半径", "radius",
+                    lambda k: app.find_dynamic(k[1]).radius,
+                    lambda k, v: setattr(app.find_dynamic(k[1]), "radius", v),
+                    0.05, 10, 0.05)
+            shapes = {app.find_dynamic(k[1]).shape for k in keys}
+            if shapes == {"cylinder"}:
+                add_row("圆柱高度", "height",
+                        lambda k: app.find_dynamic(k[1]).height,
+                        lambda k, v: setattr(app.find_dynamic(k[1]), "height",
+                                             v),
+                        0.1, 50, 0.1)
+            add_row("球心高度 z", "z_center",
+                    lambda k: app.find_dynamic(k[1]).z_center,
+                    lambda k, v: setattr(app.find_dynamic(k[1]), "z_center",
+                                         v),
+                    0.0, 50, 0.1)
+            add_row("方向 (度)", "direction_deg",
+                    lambda k: app.find_dynamic(k[1]).direction_deg,
+                    lambda k, v: setattr(app.find_dynamic(k[1]),
+                                         "direction_deg", v % 360.0),
+                    0, 360, 1.0)
+            add_row("轨迹长度", "length",
+                    lambda k: app.find_dynamic(k[1]).length,
+                    lambda k, v: setattr(app.find_dynamic(k[1]), "length",
+                                         max(0.2, v)),
+                    0.2, 50, 0.1)
+            add_row("最大速度", "speed",
+                    lambda k: app.find_dynamic(k[1]).speed_max,
+                    lambda k, v: setattr(app.find_dynamic(k[1]), "speed_max",
+                                         max(0.1, v)),
+                    0.1, 10, 0.1)
+
+    def _apply_group(self, keys, setter, value):
+        """组编辑提交：把同一数值绝对赋值给所有选中障碍物"""
+        for k in keys:
+            setter(k, value)
+        self.app.refresh_all()
+
     def set_field(self, key, value):
         w = self._widgets.get(key)
         if w is not None:
             w.blockSignals(True)
-            w.setValue(float(value)) if not isinstance(w, QComboBox) \
-                else w.setCurrentText(str(value))
+            if isinstance(w, CommitSpin):
+                w.set_value_silent(float(value))
+            else:
+                w.setCurrentText(str(value))
             w.blockSignals(False)
 
 
 # ============================== 主窗口 ==============================
 class MainWindow(QMainWindow):
+    @property
+    def selected_key(self):
+        """兼容旧代码的“焦点项”：多选时返回最后选中项"""
+        return self.selected_keys[-1] if self.selected_keys else None
+
+    @selected_key.setter
+    def selected_key(self, key):
+        self.selected_keys = [key] if key is not None else []
+
     def __init__(self, model, scene_path=None, publish=False):
         super().__init__()
         self.model = model
-        self.selected_key = None
+        self.selected_keys = []
+        self._syncing_list = False
         self.time = 0.0
         self.playing = False
         self.publish = publish
         self.scene_path = scene_path
+        self._settings = QSettings("form_nav", "scene_editor")
 
         self.setWindowTitle("障碍物场景编辑器 (2D)")
         self.resize(1280, 760)
@@ -775,7 +1065,10 @@ class MainWindow(QMainWindow):
         self.canvas = SceneCanvas(self)
         self.panel = PropertyPanel(self)
         self.list_widget = QListWidget()
-        self.list_widget.currentItemChanged.connect(self.on_list_selected)
+        self.list_widget.setSelectionMode(
+            QAbstractItemView.ExtendedSelection)  # Shift 范围 / Ctrl 逐个多选
+        self.list_widget.itemSelectionChanged.connect(
+            self.on_list_selection_changed)
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.addWidget(QLabel("障碍物列表"))
@@ -788,6 +1081,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
+        self.splitter = splitter  # 用于记住左右区域占比
         self.setCentralWidget(splitter)
 
         # 底部：时间控制
@@ -867,22 +1161,27 @@ class MainWindow(QMainWindow):
         self.list_widget.blockSignals(True)
         self.list_widget.clear()
         for s in self.model.statics:
-            self.list_widget.addItem(
+            item = QListWidgetItem(
                 "静态 #%d  %s  (%.2f, %.2f)" %
                 (s.oid, s.shape, s.x, s.y))
+            item.setData(Qt.UserRole, ("static", s.oid))
+            self.list_widget.addItem(item)
         for d in self.model.dynamics:
-            self.list_widget.addItem(
+            item = QListWidgetItem(
                 "动态 #%d  %s  (%.2f, %.2f)  dir=%.0f° len=%.2f" %
                 (d.oid, d.shape, d.cx, d.cy, d.direction_deg, d.length))
-        # 选中项同步
-        if self.selected_key is not None:
-            kind, oid = self.selected_key
-            prefix = "静态" if kind == "static" else "动态"
-            for i in range(self.list_widget.count()):
-                if self.list_widget.item(i).text().startswith(
-                        "%s #%d " % (prefix, oid)):
-                    self.list_widget.setCurrentRow(i)
-                    break
+            item.setData(Qt.UserRole, ("dynamic", d.oid))
+            self.list_widget.addItem(item)
+        # 按多选集恢复列表选中行
+        first = None
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.data(Qt.UserRole) in self.selected_keys:
+                item.setSelected(True)
+                if first is None:
+                    first = item
+        if first is not None:
+            self.list_widget.setCurrentItem(first)
         self.list_widget.blockSignals(False)
 
     def update_collisions(self):
@@ -894,9 +1193,10 @@ class MainWindow(QMainWindow):
         else:
             self.collision_label.setStyleSheet("color: green;")
             self.collision_label.setText("无冲突")
-        self.count_label.setText("静态 %d | 动态 %d" %
+        self.count_label.setText("静态 %d | 动态 %d | 已选 %d" %
                                  (len(self.model.statics),
-                                  len(self.model.dynamics)))
+                                  len(self.model.dynamics),
+                                  len(self.selected_keys)))
 
     def colliding_keys(self):
         keys = set()
@@ -912,10 +1212,31 @@ class MainWindow(QMainWindow):
     def find_dynamic(self, oid):
         return next(d for d in self.model.dynamics if d.oid == oid)
 
+    # ---- 选择管理 ----
     def select_key(self, key):
-        self.selected_key = key
+        self.selected_keys = [key] if key is not None else []
         self.panel.refresh()
         self.refresh_list()
+
+    def select_only(self, key):
+        self.selected_keys = [key] if key is not None else []
+
+    def clear_selection(self):
+        self.selected_keys = []
+
+    def add_to_selection(self, key):
+        if key not in self.selected_keys:
+            self.selected_keys.append(key)
+
+    def remove_from_selection(self, key):
+        if key in self.selected_keys:
+            self.selected_keys.remove(key)
+
+    def toggle_selection(self, key):
+        if key in self.selected_keys:
+            self.remove_from_selection(key)
+        else:
+            self.add_to_selection(key)
 
     # ---- 编辑操作 ----
     def add_obstacle(self, kind, shape):
@@ -925,41 +1246,44 @@ class MainWindow(QMainWindow):
         else:
             obj = self.model.add_dynamic(shape)
             key = ("dynamic", obj.oid)
-        self.selected_key = key
+        self.selected_keys = [key]
         self.refresh_all()
 
     def delete_selected(self):
-        if self.selected_key is None:
+        if not self.selected_keys:
             return
-        kind, oid = self.selected_key
-        if kind == "static":
-            self.model.statics = [s for s in self.model.statics
-                                  if s.oid != oid]
-        else:
-            self.model.dynamics = [d for d in self.model.dynamics
-                                   if d.oid != oid]
-        self.selected_key = None
+        del_static = {oid for kind, oid in self.selected_keys
+                      if kind == "static"}
+        del_dynamic = {oid for kind, oid in self.selected_keys
+                       if kind == "dynamic"}
+        self.model.statics = [s for s in self.model.statics
+                              if s.oid not in del_static]
+        self.model.dynamics = [d for d in self.model.dynamics
+                               if d.oid not in del_dynamic]
+        self.selected_keys = []
         self.refresh_all()
 
     def duplicate_selected(self):
-        if self.selected_key is None:
+        if not self.selected_keys:
             return
-        kind, oid = self.selected_key
-        if kind == "static":
-            src = self.find_static(oid)
-            cp = StaticObstacle.from_dict(src.to_dict())
-            cp.oid = self.model.next_id(self.model.statics)
-            cp.x += 1.0
-            self.model.statics.append(cp)
-            key = ("static", cp.oid)
-        else:
-            src = self.find_dynamic(oid)
-            cp = DynamicObstacle.from_dict(src.to_dict())
-            cp.oid = self.model.next_id(self.model.dynamics)
-            cp.cx += 1.0
-            self.model.dynamics.append(cp)
-            key = ("dynamic", cp.oid)
-        self.selected_key = key
+        new_keys = []
+        for key in list(self.selected_keys):
+            kind, oid = key
+            if kind == "static":
+                src = self.find_static(oid)
+                cp = StaticObstacle.from_dict(src.to_dict())
+                cp.oid = self.model.next_id(self.model.statics)
+                cp.x += 1.0
+                self.model.statics.append(cp)
+                new_keys.append(("static", cp.oid))
+            else:
+                src = self.find_dynamic(oid)
+                cp = DynamicObstacle.from_dict(src.to_dict())
+                cp.oid = self.model.next_id(self.model.dynamics)
+                cp.cx += 1.0
+                self.model.dynamics.append(cp)
+                new_keys.append(("dynamic", cp.oid))
+        self.selected_keys = new_keys
         self.refresh_all()
 
     # ---- 属性/画布回调 ----
@@ -1010,7 +1334,8 @@ class MainWindow(QMainWindow):
                 d.speed_max = max(0.1, value)
         self.refresh_all()
 
-    def on_obstacle_moved(self, key, x, y):
+    def set_obstacle_center(self, key, x, y):
+        """只更新模型位置（画布整体平移使用，不触发面板重建）"""
         kind, oid = key
         if kind == "static":
             s = self.find_static(oid)
@@ -1018,29 +1343,23 @@ class MainWindow(QMainWindow):
         else:
             d = self.find_dynamic(oid)
             d.cx, d.cy = x, y
-        self.panel.set_field("x", x)
-        self.panel.set_field("y", y)
-        self.panel.set_field("cx", x)
-        self.panel.set_field("cy", y)
-        self.refresh_list()
-        self.update_collisions()
 
     # ---- 列表回调 ----
-    def on_list_selected(self, item, _prev):
-        if item is None:
+    def on_list_selection_changed(self):
+        """列表 Shift/Ctrl 多选变化 -> 同步画布与属性面板"""
+        if self._syncing_list:
             return
-        text = item.text()
-        if text.startswith("静态"):
-            oid = int(text.split("#")[1].split()[0])
-            self.selected_key = ("static", oid)
-        else:
-            oid = int(text.split("#")[1].split()[0])
-            self.selected_key = ("dynamic", oid)
+        self._syncing_list = True
+        keys = []
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.isSelected():
+                keys.append(item.data(Qt.UserRole))
+        self.selected_keys = keys
+        self.canvas.refresh()
         self.panel.refresh()
-        self.canvas._scene.clearSelection()
-        it = self.canvas.items_by_key.get(self.selected_key)
-        if it is not None:
-            it.setSelected(True)
+        self.update_collisions()
+        self._syncing_list = False
 
     # ---- 时间动画 ----
     def toggle_play(self):
@@ -1066,14 +1385,17 @@ class MainWindow(QMainWindow):
     # ---- 文件 ----
     def new_scene(self):
         self.model = SceneModel()
-        self.selected_key = None
+        self.selected_keys = []
         self.scene_path = None
         self.refresh_all()
         self.canvas.fit_scene()
+        self._remember_scene()
 
     def open_scene(self):
+        start_dir = self._settings.value("last/dir", "") or ""
         path, _ = QFileDialog.getOpenFileName(
-            self, "打开场景", "", "YAML 场景 (*.yaml *.yml);;所有文件 (*)")
+            self, "打开场景", str(start_dir),
+            "YAML 场景 (*.yaml *.yml);;所有文件 (*)")
         if not path:
             return
         try:
@@ -1082,9 +1404,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "加载失败", str(e))
             return
         self.scene_path = path
-        self.selected_key = None
+        self.selected_keys = []
         self.refresh_all()
         self.canvas.fit_scene()
+        self._remember_scene()
 
     def save_scene(self):
         if self.scene_path is None:
@@ -1098,12 +1421,38 @@ class MainWindow(QMainWindow):
 
     def save_scene_as(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "保存场景", self.scene_path or "scene.yaml",
+            self, "保存场景",
+            self.scene_path or
+            os.path.join(str(self._settings.value("last/dir", "") or ""),
+                         "scene.yaml"),
             "YAML 场景 (*.yaml *.yml)")
         if not path:
             return
         self.scene_path = path
         self.save_scene()
+        self._remember_scene()
+
+    def _remember_scene(self):
+        """记住当前文件路径与所在目录，便于下次启动自动恢复"""
+        self._settings.setValue("last/scene_path", self.scene_path or "")
+        if self.scene_path:
+            self._settings.setValue("last/dir",
+                                    os.path.dirname(self.scene_path))
+
+    # ---- 窗口状态记忆（大小 / 左右占比）----
+    def restore_ui_settings(self):
+        geometry = self._settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        splitter_state = self._settings.value("window/splitter")
+        if splitter_state is not None:
+            self.splitter.restoreState(splitter_state)
+
+    def closeEvent(self, event):
+        self._settings.setValue("window/geometry", self.saveGeometry())
+        self._settings.setValue("window/splitter", self.splitter.saveState())
+        self._remember_scene()
+        super().closeEvent(event)
 
     # ---- 可选 ROS 实时发布 ----
     def _init_ros(self):
@@ -1293,17 +1642,27 @@ def main():
     default_scene = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         os.pardir, "config", "scenes", "fixed_scene.yaml")
-    path = args.scene or default_scene
+    path = args.scene
+    if path is None:
+        # 记忆上次打开的文件；不存在或缺失时回退默认场景
+        remembered = QSettings("form_nav", "scene_editor").value(
+            "last/scene_path", "")
+        if remembered and os.path.exists(str(remembered)):
+            path = str(remembered)
+    path = path or default_scene
     model = SceneModel()
     if os.path.exists(path):
         try:
             model.load(path)
         except Exception as e:
             print("场景加载失败: %s" % e, file=sys.stderr)
+    else:
+        print("场景文件不存在: %s" % path, file=sys.stderr)
 
     app = QApplication(sys.argv)
     win = MainWindow(model, scene_path=path, publish=args.publish)
     win.show()
+    win.restore_ui_settings()
     win.canvas.fit_scene()
     # 窗口布局完全就绪后再适配一次，避免首次 fitInView 拿到未就绪的视口尺寸
     QTimer.singleShot(0, win.canvas.fit_scene)
