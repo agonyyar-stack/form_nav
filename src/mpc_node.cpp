@@ -38,7 +38,7 @@ double MPC_DT = 0.05;
 double NEIGHBOR_TRAJECTORY_TIMEOUT = 0.3;
 double NEIGHBOR_FUTURE_TOLERANCE = 0.05;
 const double LOOP_RATE = 20.0;
-double tau_v_eff = 0.8;    // 线速度一阶时间常数（与 MPC 内部一致，用于制动可行性预检）
+double brake_accel_eff = 1.2;  // 刹停显式减速度 (m/s²)，与 MPC 制动约束/预检一致
 double ARRIVAL_DISTANCE = 0.1;   // 到达锁定：到终点直线距离阈值 (m)
 double ARRIVAL_VELOCITY = 0.1;   // 到达锁定：3D 速度阈值 (m/s)
 
@@ -647,17 +647,17 @@ void controlLoop(const ros::TimerEvent&) {
     current_mpc_state(6) = vel_world_z;
     current_mpc_state(7) = vel_world_w;
 
-    // 制动可行性预检：当前状态须满足 MPC 精确停车约束 tau_v*||v|| <= d_g，
-    // 否则 k=0 约束必然不可行，直接悬停（阈值与 MPC 内部 tau_v_eff 一致）。
+    // 制动可行性预检：当前状态须满足 MPC 显式减速刹停约束 ||v||² <= 2·a_brake·d_g，
+    // 否则 k=0 约束必然不可行，直接悬停（阈值与 MPC 内部 brake_accel_eff 一致）。
     const double cur_speed_sq = vel_world_x * vel_world_x +
                                 vel_world_y * vel_world_y +
                                 vel_world_z * vel_world_z;
     const double cur_speed = std::sqrt(cur_speed_sq);
-    if (cur_speed * tau_v_eff > end_dist) {
+    if (cur_speed_sq > 2.0 * brake_accel_eff * end_dist) {
         ROS_WARN_THROTTLE(0.5,
                           "%s: current speed exceeds braking feasibility "
-                          "(v=%.2f m/s, d_g=%.2f m), holding.",
-                          UAV_NAME.c_str(), cur_speed, end_dist);
+                          "(v=%.2f m/s, d_g=%.2f m, a_brake=%.2f m/s^2), holding.",
+                          UAV_NAME.c_str(), cur_speed, end_dist, brake_accel_eff);
         publishHoldCommand();
         publishStationaryPrediction(solve_stamp);
         return;
@@ -890,6 +890,7 @@ int main(int argc, char **argv) {
     double yaw_lock_dist             = nh_private.param<double>("mpc/yaw_lock_dist", 0.3);
     double tau_v                     = nh_private.param<double>("mpc/tau_v", 0.8);
     double tau_w                     = nh_private.param<double>("mpc/tau_w", 0.5);
+    double a_brake                   = nh_private.param<double>("mpc/a_brake", 1.2);
     double z_min                     = nh_private.param<double>("mpc/z_min", 0.5);
     double z_max                     = nh_private.param<double>("mpc/z_max", 2.8);
     double arrival_distance          = nh_private.param<double>("mpc/arrival_distance", 0.1);
@@ -965,6 +966,9 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(tau_w) || tau_w <= 0.0) {
         throw std::runtime_error("mpc/tau_w must be positive");
+    }
+    if (!std::isfinite(a_brake) || a_brake <= 0.0) {
+        throw std::runtime_error("mpc/a_brake must be positive");
     }
     if (!std::isfinite(z_min) || !std::isfinite(z_max) || z_min >= z_max) {
         throw std::runtime_error(
@@ -1052,9 +1056,10 @@ int main(int argc, char **argv) {
     mpc_ptr->setYawLockDistance(yaw_lock_dist);
     mpc_ptr->setVelocityTimeConstant(tau_v);
     mpc_ptr->setYawTimeConstant(tau_w);
+    mpc_ptr->setBrakeDeceleration(a_brake);
     mpc_ptr->setAltitudeMin(z_min);
     mpc_ptr->setAltitudeMax(z_max);
-    tau_v_eff = tau_v;
+    brake_accel_eff = a_brake;
     mpc_ptr->setControlInputWeight(
         DM::diag(DM{w_u, w_u, w_u, w_u}));
     mpc_ptr->setControlIncrementWeight(
@@ -1077,6 +1082,7 @@ int main(int argc, char **argv) {
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
              "lookahead=%.2f, yaw_lock_dist=%.2f, tau_v=%.2f, tau_w=%.2f, "
+             "a_brake=%.2f, "
              "arrival_dist=%.2f, arrival_vel=%.2f, "
              "w_dyn=%.2f, d_bar_dyn=%.2f, k_dyn=%.2f, "
              "z_min=%.2f, z_max=%.2f",
@@ -1086,7 +1092,7 @@ int main(int argc, char **argv) {
              k_oa, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
-             lookahead_distance, yaw_lock_dist, tau_v, tau_w,
+             lookahead_distance, yaw_lock_dist, tau_v, tau_w, a_brake,
              ARRIVAL_DISTANCE, ARRIVAL_VELOCITY,
              m_dyn, d_bar_dyn, k_dyn, z_min, z_max);
 

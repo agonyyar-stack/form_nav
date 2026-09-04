@@ -61,6 +61,7 @@
 
         <param name="mpc/tau_v" value="0.67" />            <!-- 线速度一阶时间常数 (s) -->
         <param name="mpc/tau_w" value="0.5" />            <!-- 偏航角速度一阶时间常数 (s) -->
+        <param name="mpc/a_brake" value="1.2" />          <!-- 刹停显式减速度 (m/s²)，建议 1.0~1.5 -->
         <param name="mpc/z_min" value="0.5" />            <!-- 高度硬约束下界 (m)，对所有预测步生效 -->
         <param name="mpc/z_max" value="2.8" />            <!-- 高度硬约束上界 (m) -->
         <param name="mpc/arrival_distance" value="0.1" />   <!-- 到达锁定：到终点直线距离阈值 (m) -->

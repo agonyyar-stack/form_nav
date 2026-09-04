@@ -65,6 +65,9 @@ private: //存储了 MPC 算法运行时的配置和状态
     double tau_w_;  // 偏航角速度一阶时间常数 (s)
     double K_v_;    // 线速度指令稳态增益（默认 1）
     double K_w_;    // 偏航角速度指令稳态增益（默认 1，指令即真实 yaw rate）
+    // 制动约束（2026-09-04 起为显式匀减速刹停）：
+    //   ||v||² <= 2·a_brake·d_g，a_brake 为常数减速度上限 (m/s²，建议 1.0~1.5)
+    double a_brake_;
 
     // 自身 ID
     int my_id_;
@@ -129,6 +132,7 @@ private: //存储了 MPC 算法运行时的配置和状态
     double built_w_max_;
     double built_tau_v_;
     double built_tau_w_;
+    double built_a_brake_;
     double built_K_v_;
     double built_K_w_;
     size_t built_neighbor_count_;
@@ -203,6 +207,8 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setVelocityTimeConstant(double tau) { tau_v_ = tau > 0.0 ? tau : 0.8; updateDiscreteModel(); }
     /// 设置偏航角速度一阶时间常数 (s)，<=0 时恢复默认 0.5
     void setYawTimeConstant(double tau) { tau_w_ = tau > 0.0 ? tau : 0.5; updateDiscreteModel(); }
+    /// 设置刹停显式减速度 (m/s²，>0)：制动约束 ||v||² <= 2·a_brake·d_g 与节点预检共用
+    void setBrakeDeceleration(double a) { a_brake_ = a > 0.0 ? a : 1.2; }
     /// 设置 KD-tree 静态避障 softplus 势垒强度 M
     void setObstacleWeight(double w) { Wo = w; }
     /// 设置 KD-tree 静态避障 softplus 陡度参数 k（须为正）

@@ -53,6 +53,9 @@ Mpc::Mpc() {
     tau_w_ = 0.5;   // 偏航角速度一阶时间常数 (s)
     K_v_ = 1.0;     // 线速度指令稳态增益
     K_w_ = 1.0;     // 偏航角速度指令稳态增益（指令即真实 yaw rate，不再乘 π/180）
+    // 制动约束：显式匀减速刹停 ||v||² <= 2·a_brake·d_g（替代 v_c=0 精确停车
+    // tau_v*||v|| <= d_g；旧式在低速段过严，终点锁定前易触发"推—刹—推"极限环）。
+    a_brake_ = 1.2;   // 常数减速度上限 (m/s²)，建议 1.0~1.5，可由 mpc/a_brake 覆盖
     updateDiscreteModel();
     // 编队偏移量由外部 setFormationOffsets() 注入，默认自身偏移为 [0,0,0,0]
     // KD-tree 静态避障 softplus 势垒：H = M·softplus(k·(D̄-d_eff))
@@ -79,6 +82,7 @@ Mpc::Mpc() {
     built_w_max_ = -1.0;
     built_tau_v_ = -1.0;
     built_tau_w_ = -1.0;
+    built_a_brake_ = -1.0;
     built_K_v_ = -1.0;
     built_K_w_ = -1.0;
     built_neighbor_count_ = 0;
@@ -716,6 +720,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
         std::abs(built_w_max_ - w_max_) < 1e-9 &&
         std::abs(built_tau_v_ - tau_v_) < 1e-9 &&
         std::abs(built_tau_w_ - tau_w_) < 1e-9 &&
+        std::abs(built_a_brake_ - a_brake_) < 1e-9 &&
         std::abs(built_K_v_ - K_v_) < 1e-9 &&
         std::abs(built_K_w_ - K_w_) < 1e-9 &&
         built_neighbor_count_ == neighbors.size() &&
@@ -809,20 +814,23 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
     // 初始状态约束
     opti_->subject_to(X(all, 0) == X_cur_param_);
 
-    // 制动约束：保证预测轨迹在终点前能减速停下。
-    // 解耦模型下 v_c = 0 时一阶系统总停车距离精确等于 tau_v * ||v||，
-    // 因此采用精确停车约束（替代原近似二次约束）：
-    //   tau_v * ||v_k|| <= d_g_k
-    // 注意：norm_2 在 v=0 处不可导，IPOPT 在默认零初值处求雅可比会得到
-    // NaN（Invalid_Number_Detected）。两边平方化为等价且处处光滑的形式：
-    //   tau_v^2 * ||v_k||^2 <= d_g_k^2
+    // 制动约束：保证预测轨迹在终点前能减速停下（2026-09-04 起为显式匀减速刹停）。
+    // 显式减速度形式：||v_k||² <= 2·a_brake·d_g_k
+    //   a_brake 为常数减速度上限（默认 1.2 m/s²，建议 1.0~1.5），停车距离 v²/(2a)。
+    // 替代旧的"速度指令置零等衰减"精确停车约束 tau_v*||v|| <= d_g：一阶系统指数
+    // 衰减在低速段渐近趋零、所需距离随速度线性偏大，终点锁定（d<0.1 且 v<0.1）前
+    // 易触发"推—刹—推"极限环；新式以制动能力为界，终点附近允许保留较高速度，
+    // 由终端代价与到达锁定决定最终刹停。
+    // 注意：原形式 RHS 含 sqrt(d_g²)，为保持处处光滑（避免 d_g=0 处开方/除零导致
+    // 雅可比 NaN），将两边平方化为数学等价形式：||v_k||⁴ <= (2·a_brake)²·d_g_k²。
     for (int k = 0; k <= N_; ++k) {
         MX X_k = X(all, k);
         MX v_k = X_k(Slice(4, 8));
         MX d_g_vec = X_k(Slice(0, 3)) - goal_param_;
         MX v_norm_sq = MX::dot(v_k(Slice(0, 3)), v_k(Slice(0, 3)));
         MX d_g_sq = MX::dot(d_g_vec, d_g_vec);
-        opti_->subject_to(tau_v_ * tau_v_ * v_norm_sq <= d_g_sq);
+        const double a2 = 2.0 * a_brake_;
+        opti_->subject_to(v_norm_sq * v_norm_sq <= a2 * a2 * d_g_sq);
     }
 
     // 输入约束
@@ -859,6 +867,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
     built_w_max_ = w_max_;
     built_tau_v_ = tau_v_;
     built_tau_w_ = tau_w_;
+    built_a_brake_ = a_brake_;
     built_K_v_ = K_v_;
     built_K_w_ = K_w_;
     built_neighbor_count_ = neighbors.size();
