@@ -58,6 +58,8 @@ private: //存储了 MPC 算法运行时的配置和状态
     DM Q_, F_, R_d_;
     // 编队误差权重（与子目标惩罚权重 Q_ 独立，避免两者耦合打架）
     DM Q_f_;
+    // 中间步子目标惩罚权重（链式逐点参考，独立于终端 Q_；yaw 通道置 0）
+    DM Q_int_;
 
     //运动学方程参数（yaw 与线速度解耦的一阶系统）：
     //   v̇_e = (K_v v_c - v_e)/τ_v,  ψ̇ = ω,  ω̇ = (K_ω ω_c - ω)/τ_ω
@@ -68,6 +70,11 @@ private: //存储了 MPC 算法运行时的配置和状态
     // 制动约束（2026-09-04 起为显式匀减速刹停）：
     //   ||v||² <= 2·a_brake·d_g，a_brake 为常数减速度上限 (m/s²，建议 1.0~1.5)
     double a_brake_;
+    // 梯形速度剖面参考参数（逐点参考由剖面生成，替代单一远端子目标）：
+    //   cruise_speed_ 巡航速度 (m/s)，a_acc_ref_/a_dec_ref_ 加/减速段 (m/s²)
+    double cruise_speed_;
+    double a_acc_ref_;
+    double a_dec_ref_;
 
     // 自身 ID
     int my_id_;
@@ -112,7 +119,7 @@ private: //存储了 MPC 算法运行时的配置和状态
 
     // --- Opti 复用（第三步：参数化障碍物点 + 重规划循环） ---
     std::unique_ptr<casadi::Opti> opti_;        // 优化问题实例，首次 solve 构建后复用
-    MX reference_param_;                        // 滚动子目标参考参数 (4, N_+1) [x,y,z,yaw]，各列相同
+    MX reference_param_;                        // 逐点参考参数 (4, N_+1) [x,y,z,yaw]，各列为该步目标点
     MX X_cur_param_;                            // 当前状态参数 (8, 1)
     MX obstacle_param_;                         // 最近障碍点参数 (3*M, N_+1)
     MX dyn_obs_seg_param_;                      // 动态障碍物最近线段端点参数 (6*C, N_+1)
@@ -166,11 +173,9 @@ private: //存储了 MPC 算法运行时的配置和状态
     size_t last_progress_idx_ = 0;
     // 最近一次投影的连续弧长（弧长单调保护，避免横向摆动时进度回退）
     double last_progress_s_ = 0.0;
-    // 滚动子目标：沿弧长前瞻选取，全局轨迹仅提供方向引导
     std::vector<double> path_arclength_;  // 与 global_traj_ 同步的累积弧长 (m)
-    double lookahead_distance_;           // 子目标前瞻距离 (m)
-    GlobalWaypoint rolling_goal_;         // 最近一次求解使用的子目标
-    double yaw_ref_;                      // yaw 参考（子目标方向，复用终端 Q_ 的 yaw 软约束）
+    GlobalWaypoint rolling_goal_;         // 最近一次求解使用的终端参考点（s_N 处路径点，可视化用）
+    double yaw_ref_;                      // yaw 参考（当前位置指向 s_N 的方向，复用终端 Q_ 的 yaw 软约束）
     double yaw_lock_dist_;                // 进入终点范围后冻结 yaw 参考的距离阈值 (m)
     bool has_rolling_goal_;
 public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
@@ -198,8 +203,12 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setAltitudeMin(double z) { z_min_ = z; }
     /// 设置高度硬约束上界 (m)
     void setAltitudeMax(double z) { z_max_ = z; }
-    /// 设置滚动子目标前瞻距离 (m)
-    void setLookaheadDistance(double d) { lookahead_distance_ = d; }
+    /// 设置梯形速度剖面巡航速度 (m/s)
+    void setCruiseSpeed(double v) { cruise_speed_ = v; }
+    /// 设置梯形速度剖面加速段加速度 (m/s²)
+    void setProfileAcceleration(double a) { a_acc_ref_ = a; }
+    /// 设置梯形速度剖面减速段加速度 (m/s²，建议与 a_brake 一致)
+    void setProfileDeceleration(double a) { a_dec_ref_ = a; }
     /// 设置终点 yaw 冻结距离 (m)：距全局终点小于该值时保持机头方向，
     /// 不再随"指向子目标"的方位角转动（悬停漂移会让该方位角绕圈）
     void setYawLockDistance(double d) { yaw_lock_dist_ = d; }
@@ -231,8 +240,10 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setControlInputWeight(const DM& w) { F_ = w; }
     /// 设置控制增量惩罚权重 (对角矩阵)
     void setControlIncrementWeight(const DM& w) { R_d_ = w; }
-    /// 设置滚动子目标惩罚权重 (对角矩阵，原 Q_)
+    /// 设置终端子目标惩罚权重 (对角矩阵，原 Q_)
     void setSubgoalWeight(const DM& w) { Q_ = w; }
+    /// 设置中间步子目标惩罚权重 (对角矩阵，独立于终端 Q_)
+    void setIntermediateSubgoalWeight(const DM& w) { Q_int_ = w; }
     /// 设置编队误差权重 (对角矩阵，独立于子目标惩罚权重)
     void setFormationErrorWeight(const DM& w) { Q_f_ = w; }
 
@@ -259,8 +270,15 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     /// 将物理位置投影到全局轨迹，返回最近路径点的累积弧长 s0 (m)
     double projectToPath(const Eigen::Vector3d& query_pos);
 
-    /// 沿轨迹弧长从 s0 前推 lookahead_distance_ 选取滚动子目标
-    GlobalWaypoint selectRollingGoal(double s0);
+    /// 弧长 -> 路径点线性插值（只取位置/偏航，速度字段不使用）
+    GlobalWaypoint waypointAtArc(double s);
+
+    /// 生成逐点参考目标：从当前状态 (s0, v_tan) 按梯形速度剖面
+    /// （加速-巡航-刹停包络）构造每步目标弧长，并用与 MPC 相同的一阶
+    /// 离散系数推进 1-D 弧长模型，使参考序列自身满足 MPC 动力学。
+    /// 输出 targets[0..N_] 为每步对应的路径点。
+    bool generateStepTargets(double s0, double v_tan,
+                             std::vector<GlobalWaypoint>& targets);
 
     ErrorTerms formationError(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states); //编队误差
 
@@ -302,7 +320,7 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
         return last_obstacle_pts_;
     }
 
-    /// 最近一次求解使用的滚动子目标（可视化用）
+    /// 最近一次求解使用的终端参考点（可视化用）
     const GlobalWaypoint& getLastRollingGoal() const { return rolling_goal_; }
 };
 
