@@ -54,7 +54,7 @@ ros::Publisher predicted_path_viz_pub;
 ros::Publisher traveled_path_pub;
 ros::Publisher queried_obstacles_pub;  // 第三步：最近查询障碍点可视化
 ros::Publisher obstacle_cloud_pub;     // 第三步：KD-tree 中的障碍点云可视化
-ros::Publisher sub_goal_pub;           // 滚动子目标可视化
+ros::Publisher sub_goal_pub;           // 终端参考点可视化
 
 // --- 状态量 ---
 // 显式初始化，避免首个传感器消息到达前把未定义数据送入求解器。
@@ -610,7 +610,7 @@ void controlLoop(const ros::TimerEvent&) {
 
     const ros::Time solve_stamp = ros::Time::now();
     // 分布式规划：每机在自身的物理轨迹上投影当前物理位置得到路径进度
-    // （累积弧长 s0），供滚动子目标前瞻使用。
+    // （累积弧长 s0），供逐点参考的梯形剖面生成使用。
     const Eigen::Vector3d current_pos(
         current_mpc_state(0), current_mpc_state(1), current_mpc_state(2));
     const double s0 = mpc_ptr->projectToPath(current_pos);
@@ -819,7 +819,7 @@ void controlLoop(const ros::TimerEvent&) {
         }
         queried_obstacles_pub.publish(obs_marker);
 
-        // --- 滚动子目标可视化 ---
+        // --- 终端参考点可视化 ---
         visualization_msgs::Marker sub_goal_marker;
         sub_goal_marker.header.frame_id = WORLD_FRAME;
         sub_goal_marker.header.stamp = ros::Time::now();
@@ -869,6 +869,7 @@ int main(int argc, char **argv) {
     double w_form    = nh_private.param<double>("mpc/w_form", 2000.0);
     double w_subgoal = nh_private.param<double>("mpc/w_subgoal", 20000.0);
     double w_yaw     = nh_private.param<double>("mpc/w_yaw", 1000.0);
+    double w_subgoal_int = nh_private.param<double>("mpc/w_subgoal_int", 100.0);
     int nearest_obs_num = nh_private.param<int>("mpc/nearest_obs_num", 3);
     double drone_radius = nh_private.param<double>("mpc/drone_radius", 0.35);
     double safe_dist    = nh_private.param<double>("mpc/safe_dist", 0.5);
@@ -886,11 +887,13 @@ int main(int argc, char **argv) {
         nh_private.param<std::string>("cloud_topic", "/map_generator/global_cloud");
     double neighbor_timeout          = nh_private.param<double>("communication/neighbor_trajectory_timeout", 0.3);
     double neighbor_future_tolerance = nh_private.param<double>("communication/neighbor_future_tolerance", 0.05);
-    double lookahead_distance        = nh_private.param<double>("mpc/lookahead_distance", 2.0);
     double yaw_lock_dist             = nh_private.param<double>("mpc/yaw_lock_dist", 0.3);
     double tau_v                     = nh_private.param<double>("mpc/tau_v", 0.8);
     double tau_w                     = nh_private.param<double>("mpc/tau_w", 0.5);
     double a_brake                   = nh_private.param<double>("mpc/a_brake", 1.2);
+    double v_cruise                  = nh_private.param<double>("mpc/v_cruise", 1.5);
+    double a_acc_profile             = nh_private.param<double>("mpc/a_acc", 1.5);
+    double a_dec_profile             = nh_private.param<double>("mpc/a_dec", a_brake);
     double z_min                     = nh_private.param<double>("mpc/z_min", 0.5);
     double z_max                     = nh_private.param<double>("mpc/z_max", 2.8);
     double arrival_distance          = nh_private.param<double>("mpc/arrival_distance", 0.1);
@@ -946,11 +949,11 @@ int main(int argc, char **argv) {
     if (!std::isfinite(w_subgoal) || w_subgoal < 0.0) {
         throw std::runtime_error("mpc/w_subgoal must be non-negative");
     }
+    if (!std::isfinite(w_subgoal_int) || w_subgoal_int < 0.0) {
+        throw std::runtime_error("mpc/w_subgoal_int must be non-negative");
+    }
     if (!std::isfinite(w_yaw) || w_yaw < 0.0) {
         throw std::runtime_error("mpc/w_yaw must be non-negative");
-    }
-    if (!std::isfinite(lookahead_distance) || lookahead_distance <= 0.0) {
-        throw std::runtime_error("mpc/lookahead_distance must be positive");
     }
     if (!std::isfinite(yaw_lock_dist) || yaw_lock_dist < 0.0) {
         throw std::runtime_error("mpc/yaw_lock_dist must be non-negative");
@@ -969,6 +972,16 @@ int main(int argc, char **argv) {
     }
     if (!std::isfinite(a_brake) || a_brake <= 0.0) {
         throw std::runtime_error("mpc/a_brake must be positive");
+    }
+    if (!std::isfinite(v_cruise) || v_cruise <= 0.0 || v_cruise > u_max) {
+        throw std::runtime_error(
+            "mpc/v_cruise must be finite, positive and <= mpc/u_max");
+    }
+    if (!std::isfinite(a_acc_profile) || a_acc_profile <= 0.0) {
+        throw std::runtime_error("mpc/a_acc must be positive");
+    }
+    if (!std::isfinite(a_dec_profile) || a_dec_profile <= 0.0) {
+        throw std::runtime_error("mpc/a_dec must be positive");
     }
     if (!std::isfinite(z_min) || !std::isfinite(z_max) || z_min >= z_max) {
         throw std::runtime_error(
@@ -1052,7 +1065,9 @@ int main(int argc, char **argv) {
     mpc_ptr->setCollisionActivationRange(d_act_ca);
     mpc_ptr->setCollisionSoftplusK(k_ca);
     mpc_ptr->setCollisionWeight(w_ca);
-    mpc_ptr->setLookaheadDistance(lookahead_distance);
+    mpc_ptr->setCruiseSpeed(v_cruise);
+    mpc_ptr->setProfileAcceleration(a_acc_profile);
+    mpc_ptr->setProfileDeceleration(a_dec_profile);
     mpc_ptr->setYawLockDistance(yaw_lock_dist);
     mpc_ptr->setVelocityTimeConstant(tau_v);
     mpc_ptr->setYawTimeConstant(tau_w);
@@ -1065,34 +1080,44 @@ int main(int argc, char **argv) {
     mpc_ptr->setControlIncrementWeight(
         DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
     // 编队误差权重：独立于子目标惩罚权重（默认小一个数量级），
-    // yaw 通道恒为 0 —— yaw 只跟踪各自速度/子目标方向，编队误差不再拉齐机头，
-    // 避免与 yaw 参考（子目标方向）打架。
+    // yaw 通道恒为 0 —— yaw 只跟踪各自速度/终端参考方向，编队误差不再拉齐机头，
+    // 避免与 yaw 参考打架。
     mpc_ptr->setFormationErrorWeight(
         DM::diag(DM{w_form, w_form, w_form / 2.0, 0.0}));
-    // 滚动子目标惩罚权重（原 Q_）：位置 x:y:z = 1:1:0.5；
+    // 终端子目标惩罚权重（原 Q_）：位置 x:y:z = 1:1:0.5；
     // yaw 通道用独立参数 w_yaw（默认 1000，约为位置权重的 1/20），
-    // 复用现有终端软约束跟踪子目标方向，不新增代价项。
+    // 复用现有终端软约束跟踪 s_N 方向，不新增代价项。
     mpc_ptr->setSubgoalWeight(
         DM::diag(DM{w_subgoal, w_subgoal, w_subgoal / 2.0, w_yaw}));
+    // 中间步子目标惩罚权重（链式逐点参考，独立于终端 Q_）：
+    // 位置 x:y:z = 1:1:0.5，yaw 通道为 0 —— 机头只由终端 yaw 软约束管理，
+    // 避免每步锁定航向与避障/转弯冲突。
+    mpc_ptr->setIntermediateSubgoalWeight(
+        DM::diag(DM{w_subgoal_int, w_subgoal_int,
+                    w_subgoal_int / 2.0, 0.0}));
 
     ROS_INFO("%s: MPC params -- N=%d, dt=%.3f, u_max=%.2f, w_max=%.2f, "
              "d_safe_ca=%.2f, d_act_ca=%.2f, k_ca=%.2f, w_ca=%.2f, "
-             "w_form=%.2f, w_subgoal=%.2f, w_yaw=%.2f, nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
+             "w_form=%.2f, w_subgoal=%.2f, w_subgoal_int=%.2f, w_yaw=%.2f, "
+             "nearest_obs_num=%d, drone_radius=%.2f, w_oa=%.2f, "
              "k_oa=%.2f, detect_range=%.2f, "
              "replan_max_iter=%d, ipopt_max_iter=%d, ipopt_tol=%.1e, "
              "neighbor_timeout=%.3f, future_tolerance=%.3f, "
-             "lookahead=%.2f, yaw_lock_dist=%.2f, tau_v=%.2f, tau_w=%.2f, "
+             "v_cruise=%.2f, a_acc=%.2f, a_dec=%.2f, yaw_lock_dist=%.2f, "
+             "tau_v=%.2f, tau_w=%.2f, "
              "a_brake=%.2f, "
              "arrival_dist=%.2f, arrival_vel=%.2f, "
              "w_dyn=%.2f, d_bar_dyn=%.2f, k_dyn=%.2f, "
              "z_min=%.2f, z_max=%.2f",
              UAV_NAME.c_str(), N, dt, u_max, w_max,
-             d_safe_ca, d_act_ca, k_ca, w_ca, w_form, w_subgoal, w_yaw,
+             d_safe_ca, d_act_ca, k_ca, w_ca, w_form,
+             w_subgoal, w_subgoal_int, w_yaw,
              nearest_obs_num, drone_radius, w_oa,
              k_oa, detect_range, replan_max_iter,
              ipopt_max_iter, ipopt_tol,
              NEIGHBOR_TRAJECTORY_TIMEOUT, NEIGHBOR_FUTURE_TOLERANCE,
-             lookahead_distance, yaw_lock_dist, tau_v, tau_w, a_brake,
+             v_cruise, a_acc_profile, a_dec_profile, yaw_lock_dist,
+             tau_v, tau_w, a_brake,
              ARRIVAL_DISTANCE, ARRIVAL_VELOCITY,
              m_dyn, d_bar_dyn, k_dyn, z_min, z_max);
 

@@ -38,12 +38,17 @@ Mpc::Mpc() {
     z_min_ = 0.5;  // 高度下界 (m)
     z_max_ = 2.8;  // 高度上界 (m)
     //权重矩阵Q,F
-    Q_ = DM::diag(DM{20000, 20000, 10000, 100}); // 滚动子目标惩罚权重（可由 mpc/w_subgoal 覆盖）
+    Q_ = DM::diag(DM{20000, 20000, 10000, 100}); // 终端子目标惩罚权重（可由 mpc/w_subgoal 覆盖）
     F_ = DM::diag(DM{100, 100, 100, 100});       // 控制输入惩罚
     R_d_ = DM::diag(DM{100, 100, 100, 25});      // 控制增量惩罚（抑制重规划导致的指令抖动）
-    // 滚动子目标参数
-    lookahead_distance_ = 2.0;                   // 子目标沿弧长前瞻距离 (m)
-    yaw_ref_ = 0.0;                              // yaw 参考：由 solve() 按子目标方向更新
+    // 中间步子目标惩罚权重：链式逐点参考，独立于终端 Q_（默认取 Q_ 的 1/10，
+    // yaw 通道置 0，机头只由终端 yaw 软约束管理）
+    Q_int_ = DM::diag(DM{2000, 2000, 1000, 0});
+    // 梯形速度剖面参数（可由 mpc/v_cruise、a_acc、a_dec 覆盖）
+    cruise_speed_ = 1.5;   // 剖面巡航速度 (m/s)
+    a_acc_ref_ = 1.5;      // 剖面加速段加速度 (m/s²)
+    a_dec_ref_ = 1.2;      // 剖面减速段加速度 (m/s²，默认与 a_brake 一致)
+    yaw_ref_ = 0.0;                              // yaw 参考：由 solve() 按 s_N 方向更新
     yaw_lock_dist_ = 0.3;                        // 终点范围 yaw 冻结距离 (m)
     has_rolling_goal_ = false;
     // 编队误差权重：与子目标惩罚权重 Q_ 拆分为独立项，默认比 Q_ 小一个数量级
@@ -161,7 +166,7 @@ void Mpc::setGlobalTrajectory(const std::vector<GlobalWaypoint>& traj) {
     last_progress_idx_ = 0;
     last_progress_s_ = 0.0;
 
-    // 预计算累积弧长表，供滚动子目标沿弧长前推
+    // 预计算累积弧长表，供逐点参考的弧长插值/路径切向计算
     path_arclength_.resize(global_traj_.size());
     path_arclength_[0] = 0.0;
     for (size_t i = 1; i < global_traj_.size(); ++i) {
@@ -261,23 +266,22 @@ double Mpc::projectToPath(const Eigen::Vector3d& query_pos) {
     return s_final;
 }
 
-GlobalWaypoint Mpc::selectRollingGoal(double s0) {
+// 弧长 -> 路径点线性插值。全局轨迹只提供几何引导（位置/切向），不提供
+// 时间戳与速度字段；参考速度由 generateStepTargets 的梯形剖面生成。
+GlobalWaypoint Mpc::waypointAtArc(double s) {
     GlobalWaypoint goal;
-    has_rolling_goal_ = false;
     if (!has_global_traj_ || global_traj_.empty() ||
         path_arclength_.size() != global_traj_.size()) {
         return goal;
     }
 
     const double total = path_arclength_.back();
-    const double s_clamped = std::min(std::max(s0, 0.0), total);
+    const double s_clamped = std::min(std::max(s, 0.0), total);
 
-    // 已到轨迹末端：子目标即终点
+    // 已到轨迹末端：返回终点
     if (s_clamped >= total) {
         goal = global_traj_.back();
         goal.vyaw = 0.0;
-        has_rolling_goal_ = true;
-        rolling_goal_ = goal;
         return goal;
     }
 
@@ -291,48 +295,85 @@ GlobalWaypoint Mpc::selectRollingGoal(double s0) {
     if (i0 >= global_traj_.size() - 1) {
         goal = global_traj_.back();
         goal.vyaw = 0.0;
-        has_rolling_goal_ = true;
-        rolling_goal_ = goal;
         return goal;
     }
 
-    // 沿弧长前推 lookahead_distance_
-    const double target_arc = s_clamped + std::max(0.0, lookahead_distance_);
-    if (target_arc >= total) {
-        goal = global_traj_.back();
-    } else {
-        auto upper2 = std::lower_bound(path_arclength_.begin(),
-                                       path_arclength_.end(), target_arc);
-        size_t i1 = static_cast<size_t>(std::distance(path_arclength_.begin(), upper2));
-        if (i1 >= path_arclength_.size() || path_arclength_[i1] > target_arc) {
-            if (i1 > 0) --i1;
-        }
-        if (i1 >= global_traj_.size() - 1) {
-            goal = global_traj_.back();
-        } else {
-            const double seg_len = path_arclength_[i1 + 1] - path_arclength_[i1];
-            const double ratio = seg_len > 0.0
-                                     ? (target_arc - path_arclength_[i1]) / seg_len
-                                     : 0.0;
-            const auto lerp = [ratio](double from, double to) {
-                return from + ratio * (to - from);
-            };
-            const GlobalWaypoint& wp0 = global_traj_[i1];
-            const GlobalWaypoint& wp1 = global_traj_[i1 + 1];
-            goal.x = lerp(wp0.x, wp1.x);
-            goal.y = lerp(wp0.y, wp1.y);
-            goal.z = lerp(wp0.z, wp1.z);
-            goal.yaw = lerp(wp0.yaw, wp1.yaw);
-            goal.vx = lerp(wp0.vx, wp1.vx);
-            goal.vy = lerp(wp0.vy, wp1.vy);
-            goal.vz = lerp(wp0.vz, wp1.vz);
-        }
-    }
-    // 子目标只使用位置/偏航（yaw 参考恒 0），速度字段不使用
+    const double seg_len = path_arclength_[i0 + 1] - path_arclength_[i0];
+    const double ratio = seg_len > 0.0
+                             ? (s_clamped - path_arclength_[i0]) / seg_len
+                             : 0.0;
+    const auto lerp = [ratio](double from, double to) {
+        return from + ratio * (to - from);
+    };
+    const GlobalWaypoint& wp0 = global_traj_[i0];
+    const GlobalWaypoint& wp1 = global_traj_[i0 + 1];
+    goal.x = lerp(wp0.x, wp1.x);
+    goal.y = lerp(wp0.y, wp1.y);
+    goal.z = lerp(wp0.z, wp1.z);
+    goal.yaw = lerp(wp0.yaw, wp1.yaw);
+    // 参考只使用位置/偏航；速度字段由梯形剖面另行生成，不使用路径自带值
+    goal.vx = goal.vy = goal.vz = 0.0;
     goal.vyaw = 0.0;
-    has_rolling_goal_ = true;
-    rolling_goal_ = goal;
     return goal;
+}
+
+// 逐点参考生成：从当前状态 (s0, v_tan) 出发，按"加速-巡航-刹停包络"梯形
+// 速度剖面构造每步期望速度，并用与 updateDiscreteModel() 相同的一阶离散
+// 系数推进 1-D 弧长模型 v_{k+1}=αv_k+βv_c、s_{k+1}=s_k+γv_k+δv_c，使
+// 参考序列自身满足 MPC 动力学，中间步子目标软约束不会与动力学拉扯。
+// 期望速度取三者最小：时间基准加速爬升（从当前实际速度出发，避免起步
+// 死锁）、巡航速度上限、到终点的刹停包络（口径与 MPC 制动约束一致）。
+bool Mpc::generateStepTargets(double s0, double v_tan,
+                              std::vector<GlobalWaypoint>& targets) {
+    targets.clear();
+    if (!has_global_traj_ || global_traj_.empty() ||
+        path_arclength_.size() != global_traj_.size()) {
+        return false;
+    }
+
+    const double total = path_arclength_.back();
+    const double s = std::min(std::max(s0, 0.0), total);
+    const double d_rem = total - s;
+
+    // 剖面初速：不允许反向，不超巡航速度，不超出刹停包络
+    // （v² <= 2·a_dec·d_rem，与 MPC 制动约束同口径）
+    const double v_brake0 = std::sqrt(std::max(2.0 * a_dec_ref_ * d_rem, 0.0));
+    double v = std::max(0.0, std::min(v_tan, cruise_speed_));
+    v = std::min(v, v_brake0);
+
+    // 一阶离散系数（与 updateDiscreteModel() 线速度通道一致）
+    const double alpha = std::exp(-dt_ / tau_v_);
+    const double beta  = K_v_ * (1.0 - alpha);
+    const double gamma = tau_v_ * (1.0 - alpha);
+    const double delta = K_v_ * (dt_ - gamma);
+
+    targets.resize(N_ + 1);
+    targets[0] = waypointAtArc(s);
+    double pos = s;
+    double vel = v;
+    for (int k = 0; k < N_; ++k) {
+        // 加速爬升以当前实际速度 + (k+1)·dt·a_acc 为时间基准，逐周期从
+        // 当前状态重建，落后/绕障后的偏差在下一周期自动被剖面吸收
+        const double v_traj = std::min(cruise_speed_,
+                                       vel + a_acc_ref_ * (k + 1) * dt_);
+        const double v_env = std::sqrt(
+            std::max(2.0 * a_dec_ref_ * (total - pos), 0.0));
+        const double v_des = std::min(v_traj, v_env);
+
+        // 一步内把 1-D 模型速度推到 v_des 所需的切向指令（受输入限幅）
+        double v_c = (v_des - alpha * vel) / beta;
+        v_c = std::max(-u_max_, std::min(u_max_, v_c));
+
+        const double v_next = alpha * vel + beta * v_c;
+        double s_next = pos + gamma * vel + delta * v_c;
+        if (s_next >= total) {
+            s_next = total;  // 到达终点后参考钉在终点，后续步由刹停包络收速度
+        }
+        targets[k + 1] = waypointAtArc(s_next);
+        pos = s_next;
+        vel = v_next;
+    }
+    return true;
 }
 
 ErrorTerms Mpc::formationError(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states) {
@@ -743,7 +784,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
     X = opti_->variable(8, N_ + 1); //状态序列，位姿速度
     U = opti_->variable(4, N_); //控制序列：惯性系线速度指令 + yaw rate 指令
 
-    // 参数：滚动子目标参考、当前状态、最近障碍点（KD-tree 查询在求解器外完成）、终点
+    // 参数：逐点参考（每列一个目标点）、当前状态、最近障碍点（KD-tree 查询在求解器外完成）、终点
     reference_param_ = opti_->parameter(4, N_ + 1);
     X_cur_param_ = opti_->parameter(8, 1);
     obstacle_param_ = opti_->parameter(3 * nearest_obs_num_, N_ + 1);
@@ -772,7 +813,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
 
         ErrorTerms errors1 = formationError(k, reference_k, neighbor_params_, X_k);
         MX S_f = errors1.S1;  // 编队 containment 误差（仅邻居项）
-        // 滚动子目标误差：预测状态（位置 + 偏航）vs 子目标参考
+        // 逐点参考误差：预测状态（位置 + 偏航）vs 该步梯形剖面参考点
         MX subgoal_err = X_k(Slice(0, 4)) - reference_k(Slice(0, 4));
         MX H_ca = collisionAvoidance(reference_k, k, neighbor_params_, X_k);
         cost += H_ca;
@@ -784,13 +825,17 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
         cost += dynamicObstacleAvoidance(X_k, k);
 
         if (k < N_) {
-            // 子目标惩罚只加在终端步，中间步仅编队项独立加权，互不耦合
-            // cost += MX::mtimes({subgoal_err.T(), Q_, subgoal_err});
+            // 中间步子目标惩罚（链式逐点参考，独立小权重 Q_int_）：
+            // k=0 由 X_0 == 当前状态约束固定，跳过；Q_int_ yaw 通道为 0
+            if (k >= 1) {
+                cost += MX::mtimes({subgoal_err.T(), Q_int_, subgoal_err});
+            }
             cost += MX::mtimes({S_f.T(), Q_f_, S_f});
             
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k}); // 控制输入惩罚
         } else {
+            // 终端子目标惩罚（Q_，独立于中间步 Q_int_）
             cost += MX::mtimes({subgoal_err.T(), Q_, subgoal_err});
             cost += MX::mtimes({S_f.T(), Q_f_, S_f});
         }
@@ -908,29 +953,49 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
         return false;
     }
 
-    // 滚动子目标：沿弧长从最近投影点前推 lookahead_distance_。
-    // 全局轨迹只提供方向引导，整个预测时域跟踪同一个子目标点。
-    rolling_goal_ = selectRollingGoal(s0);
-    if (!has_rolling_goal_) {
-        std::cerr << "[MPC] Failed to select rolling goal." << std::endl;
-        return false;
-    }
-
-    // yaw 参考 = 子目标方向（不新增代价项，复用终端 Q_ 的 yaw 软约束）：
-    //   当前点 -> 滚动子目标 的水平方向角。与子目标距离过近（at 目标点附近）
-    //   时方向无定义，保持上一周期参考；相对当前 yaw 做 ±π 连续化（unwrap），
-    //   避免参考在路径折角处跳 ±π 导致 (ψ-ψ_ref)² 出现尖点/绕远路旋转。
-    // 进入终点范围（距全局终点 < yaw_lock_dist_）后冻结参考：无人机已在终点
-    // 附近悬停漂移时，"指向终点"的方位角会绕圈旋转，继续跟踪会产生冗余的
-    // 持续转头；冻结后由终端 Q_ yaw 软约束保持进入该范围时的机头方向。
     const Eigen::Vector3d cur_pos(current_states(0), current_states(1),
                                   current_states(2));
+    const Eigen::Vector3d v_cur(current_states(4), current_states(5),
+                                current_states(6));
+
+    // 逐点参考：从当前状态出发，沿剩余路径按梯形速度剖面（加速-巡航-刹停
+    // 包络）生成每一步的期望目标点。参考由与 MPC 相同的一阶离散系数推进，
+    // 自身满足 MPC 动力学；全局轨迹只提供几何形状，速度/时间信息由剖面
+    // 现场生成，每周期从当前实际状态重建。
+    // 剖面初速 = 当前速度沿路径切向的分量。
+    Eigen::Vector3d tangent = Eigen::Vector3d::UnitX();
+    constexpr double kArcEps = 1e-3;
+    const GlobalWaypoint wp_back = waypointAtArc(s0 - kArcEps);
+    const GlobalWaypoint wp_fwd = waypointAtArc(s0 + kArcEps);
+    const Eigen::Vector3d seg_dir(wp_fwd.x - wp_back.x,
+                                  wp_fwd.y - wp_back.y,
+                                  wp_fwd.z - wp_back.z);
+    if (seg_dir.norm() > 1e-6) {
+        tangent = seg_dir.normalized();
+    } else if (v_cur.norm() > 1e-3) {
+        tangent = v_cur.normalized();  // 路径退化（如单点）时退回当前速度方向
+    }
+    const double v_tan = v_cur.dot(tangent);
+
+    std::vector<GlobalWaypoint> targets;
+    if (!generateStepTargets(s0, v_tan, targets)) {
+        std::cerr << "[MPC] Failed to generate step targets." << std::endl;
+        return false;
+    }
+    rolling_goal_ = targets.back();  // 终端参考点（s_N 处路径点，可视化用）
+    has_rolling_goal_ = true;
+
+    // yaw 参考 = 当前位置指向 s_N 参考点的水平方向角（不新增代价项，复用
+    // 终端 Q_ 的 yaw 软约束）：相对当前 yaw 做 ±π 连续化（unwrap），避免
+    // 参考在路径折角处跳 ±π 导致 (ψ-ψ_ref)² 出现尖点/绕远路旋转。进入终点
+    // 范围（距全局终点 < yaw_lock_dist_）后冻结参考，避免悬停漂移时"指向
+    // 终点"的方位角绕圈导致冗余转头；冻结后由终端 Q_ yaw 软约束保持机头。
     const Eigen::Vector3d traj_end(global_traj_.back().x,
                                    global_traj_.back().y,
                                    global_traj_.back().z);
     if ((traj_end - cur_pos).norm() > yaw_lock_dist_) {
-        const Eigen::Vector3d yaw_ref_vec(rolling_goal_.x - current_states(0),
-                                          rolling_goal_.y - current_states(1),
+        const Eigen::Vector3d yaw_ref_vec(rolling_goal_.x - cur_pos.x(),
+                                          rolling_goal_.y - cur_pos.y(),
                                           0.0);
         if (yaw_ref_vec.norm() > 1e-3) {
             const double psi_cur = current_states(3);
@@ -945,9 +1010,9 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
     std::vector<double> reference_values;
     reference_values.reserve(4 * (N_ + 1));
     for (int k = 0; k <= N_; ++k) {
+        const GlobalWaypoint& ref = targets[k];
         reference_values.insert(reference_values.end(),
-                                {rolling_goal_.x, rolling_goal_.y,
-                                 rolling_goal_.z, yaw_ref_});
+                                {ref.x, ref.y, ref.z, yaw_ref_});
     }
     opti_->set_value(reference_param_,
                      casadi::DM::reshape(DM(reference_values), 4, N_ + 1));
@@ -1008,8 +1073,8 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
 
     // 查询点：
     //   非首轮：用上一轮预测轨迹整体前移一列 —— k=0..N-1 取上一轮第 k+1 列
-    //           （当前状态 ≈ 上一轮第 1 列），k=N 无对应列，用滚动子目标兜底；
-    //   首轮（无上一轮解/新轨迹到达）：当前状态位置 → 滚动子目标 直线采样 N+1 点。
+    //           （当前状态 ≈ 上一轮第 1 列），k=N 无对应列，用终端参考点兜底；
+    //   首轮（无上一轮解/新轨迹到达）：当前状态位置 → 终端参考点 直线采样 N+1 点。
     const Eigen::Vector3d goal_pos(rolling_goal_.x, rolling_goal_.y,
                                    rolling_goal_.z);
     auto buildQueryPoints =
