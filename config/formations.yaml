@@ -8,13 +8,13 @@ offsets:
 
 agents:
   uav0:
-    neighbors: [3]
+    neighbors: [2, 3, 4, 5]
   uav1:
-    neighbors: [0, 2]
+    neighbors: [0, 2, 3, 4, 5]
   uav2:
-    neighbors: [5]
+    neighbors: [3, 4, 5]
   uav3:
-    neighbors: [4]
+    neighbors: [4, 5]
   uav4:
     neighbors: []
   uav5:

@@ -3,7 +3,7 @@
 ## 项目概况
 
 - 路径：`~/catkin_ws/src/form_nav`，ROS Noetic + PX4 + Gazebo，多无人机编队导航；目标是在仿真验证后实机实验并写论文。
-- 技术栈：全局层 A*（纯 A*，含轻量取锯齿后处理；kinoA* 代码保留但当前未启用），局部层 MPC（CasADi + IPOPT），静态避障用 KD-tree 查询每个预测步最近的 3 个障碍点构造 softplus 势垒，编队通信拓扑为有向无环图（无双向通信），各机互发预测轨迹用于编队防碰。
+- 技术栈：全局层 A*（纯 A*，含轻量取锯齿后处理；kinoA* 代码保留但当前未启用），局部层 MPC（CasADi + IPOPT），静态避障用 KD-tree 查询每个预测步最近的 3 个障碍点构造 softplus 势垒，机间通信拓扑为全互连同向邻接（每对无人机恰有一条单向避让边，等价于无环全序），各机互发预测轨迹用于编队防碰。
 
 ## 框架（当前）
 
@@ -53,7 +53,12 @@
 
 ### 编队与避碰
 
-- 优先级避让：利用 DAG 拓扑"接收者避让发布者的预测轨迹"，天然形成一致优先级（leader 最高，逐级向下），避免对称避让振荡。
+- 优先级避让：通讯拓扑为全互连同向邻接——按固定优先级（当前 config 等价序
+  uav4 > uav5 > uav3 > uav2 > uav0 > uav1）排序后邻接矩阵上三角全置 1，每对
+  无人机恰有一条"接收者避让发布者"的单向边。任意两机（包括原先没有通讯边的
+  uav1/uav4 等）都有避让关系，避免通信缺失导致相撞；拓扑无环，也不会出现
+  双向避让振荡。
+  通信拓扑：无环竞赛图，一张无自环、无重边的有向完全图。任意两点之间有且只有一条边。竞赛图的边数是 O(n^2) 
 - 队形：巡航段松散，只要求终点恢复编队。
 - 障碍避碰：KD-tree 查询每个预测步最近的 3 个障碍点（障碍点作为参数参与优化，代价可导）；
   softplus 势垒（2026-09-03 起与 compare/safe-softpus 分支一致）
@@ -66,8 +71,9 @@
 - 机间避碰（2026-09-03 起与静态避障同形式）：邻居预测轨迹按求解时间网格对齐后
   作为参数参与优化；`d_eff = ||p_i−p_j|| − 2·r_drone`（有效间距），
   `H_ca = Σ (Wc/d_scale)·softplus(k_ca·(d_act_ca−d_eff))`，
-  `d_scale = max(d_eff − d_safe_ca, 0.01)`；launch 默认 `w_ca=20`、
-  `d_safe_ca=0.2 m`、`d_act_ca=1.0 m`、`k_ca=1.0`。
+  `d_scale = max(d_eff − d_safe_ca, 0.01)`；launch 默认 `w_ca=5`、
+  `d_safe_ca=0.2 m`、`d_act_ca=0.6 m`、`k_ca=1.0`（全互连同向邻接后每步
+  机间势垒项变多，收紧 `d_act_ca` 避免叠加惩罚过强）。
 - 动态障碍避碰（2026-08-31 更新：点-折线最短距离；2026-09-02 更新：softplus
   势垒）：动态障碍物（圆柱/球体）轨迹已知（仿真阶段由 `random_obs` 按解析轨迹
   发布 ground truth），MPC 单独维护动态障碍物表，按求解时间网格对齐后作为参数
@@ -139,6 +145,14 @@
   调大前瞻量；而逐点参考用的是现场重建的平滑速度剖面（非全局轨迹自带
   时间戳/速度字段），既保留"时间自由"又为中间步提供形状与进度引导，
   不会回到旧式逐点时间跟踪对全局路径质量的敏感与振荡。
+- 2026-09-04：机间避碰通讯拓扑由稀疏 DAG 重构为"全互连同向邻接"——按固定
+  优先级（当前等价序 uav4 > uav5 > uav3 > uav2 > uav0 > uav1）排序后邻接
+  矩阵上三角全置 1，每对无人机恰有一条"接收者避让发布者"的单向边。
+  原因：原稀疏 DAG 下部分空间邻近的机对没有通讯边（如 y=0 同走廊的
+  uav1/uav4），通信缺失时存在相撞风险；全互连同向邻接保证任意两机都有
+  避让关系，同时无环（等价全序优先级），不会出现双向避让振荡。邻居数
+  增加后每步机间势垒项变多，`d_act_ca` 由 1.0 m 收紧为 0.6 m（launch
+  `w_ca=5`），`config/formations.yaml` 的 neighbors 同步更新。
 
 ## MPC 代价惩罚项（当前）
 
@@ -179,6 +193,6 @@
 - `src/mpc_node.cpp`：ROS 节点（状态填充、指令发布、邻居轨迹、可视化）。
 - `src/astar_node.cpp`（纯 A*，默认）、`src/kino_astar_node.cpp`（kinoA*，未启用）。
 - `launch/formation_test.launch`（编队测试，`global_planner:=astar/kino_astar`）、`launch/single_test.launch`（单机）、`launch/mpc.launch`（MPC 参数）。
-- `config/formations.yaml`：编队偏移与邻居拓扑（DAG）。
+- `config/formations.yaml`：编队偏移与邻居拓扑（全互连同向邻接，无环全序）。
 - `bag/`：录包；`docs/`：参考论文与实验输出。
 - 构建与运行：`cd ~/catkin_ws && catkin_make && source devel/setup.bash`；单机 `roslaunch form_nav single_test.launch`，编队 `roslaunch form_nav formation_test.launch`。

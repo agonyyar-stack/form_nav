@@ -35,7 +35,7 @@
         <param name="mpc/w_ca" value="5.0" />          <!-- 相互碰撞 softplus 势垒强度 M -->
         <param name="mpc/k_ca" value="1.0" />           <!-- 机间避碰 softplus 陡度参数 k -->
         <param name="mpc/d_safe_ca" value="0.2" />     <!-- 编队内安全距离下限 L (m)，有效间距口径，softplus 下参与 d_scale -->
-        <param name="mpc/d_act_ca" value="1.0" />      <!-- 机间避碰势垒中心距离 D̄ (m)，即 softplus 的 d_bar -->
+        <param name="mpc/d_act_ca" value="0.6" />      <!-- 机间避碰势垒中心距离 D̄ (m)，即 softplus 的 d_bar -->
 
         <param name="mpc/w_oa" value="5.0" />            <!-- 静态避障 softplus 势垒强度 M -->
         <param name="mpc/k_oa" value="1.0" />            <!-- 静态避障 softplus 陡度参数 k -->
