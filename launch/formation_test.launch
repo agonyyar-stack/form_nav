@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="rviz" default="true" />
-  <arg name="scene" default="1" /> <!-- 1=fixed（固定复杂场景）, 2=random（随机障碍物） -->
+  <arg name="scene" default="2" /> <!-- 1=fixed（固定复杂场景）, 2=random（随机障碍物） -->
   <arg name="world_frame" default="world" />
   <arg name="formation_config_file"
        default="$(find form_nav)/config/formations.yaml" />

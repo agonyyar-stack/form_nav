@@ -178,6 +178,17 @@ private: //存储了 MPC 算法运行时的配置和状态
     double yaw_ref_;                      // yaw 参考（当前位置指向 s_N 的方向，复用终端 Q_ 的 yaw 软约束）
     double yaw_lock_dist_;                // 进入终点范围后冻结 yaw 参考的距离阈值 (m)
     bool has_rolling_goal_;
+
+    /// 构造热启动初值：
+    ///  - 有上一轮解：控制序列整体前移一步（滚动时域下新问题第 k 步对应上一轮
+    ///    第 k+1 步，末列零阶保持），状态序列用精确离散模型从当前状态前推得到；
+    ///  - 无上一轮解（新轨迹/首次求解/Opti 重建后）：用链式参考 targets 的逐步
+    ///    差分速度经一阶模型反解构造参考冷启动。
+    /// 两种情况都保证 X(0)=当前状态且 X/U 满足动力学，输出 out_x (8, N_+1)、
+    /// out_u (4, N_)，返回是否构造成功。
+    bool buildWarmStart(const Eigen::VectorXd& current_states,
+                        const std::vector<GlobalWaypoint>& targets,
+                        Eigen::MatrixXd& out_x, Eigen::MatrixXd& out_u);
 public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     Mpc();
     ~Mpc();
