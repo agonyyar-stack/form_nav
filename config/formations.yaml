@@ -1,21 +1,35 @@
 offsets:
-  uav0: [-1.0, -2.0, 0.0, 0.0]
-  uav1: [-1.0,  0.0, 0.0, 0.0]
-  uav2: [-1.0,  2.0, 0.0, 0.0]
-  uav3: [ 1.0, -2.0, 0.0, 0.0]
-  uav4: [ 1.0,  0.0, 0.0, 0.0]
-  uav5: [ 1.0,  2.0, 0.0, 0.0]
+  # 三角形顶点
+  uav0: [0.0, 0.0, 0.0, 0.0]
+  uav1: [0.0, 3.0, 0.0, 0.0]
+  uav2: [2.0, 1.5, 0.0, 0.0]
+  # 三角形内部
+  uav3: [0.1, 1.5, 0.0, 0.0]
+  uav4: [1.0, 2.2, 0.0, 0.0]
+  uav5: [1.0, 0.8, 0.0, 0.0]
 
 agents:
+  # uav0:
+  #   neighbors: [2, 3, 4, 5]
+  # uav1:
+  #   neighbors: [0, 2, 3, 4, 5]
+  # uav2:
+  #   neighbors: [3, 4, 5]
+  # uav3:
+  #   neighbors: [4, 5]
+  # uav4:
+  #   neighbors: []
+  # uav5:
+  #   neighbors: [4]
   uav0:
-    neighbors: [2, 3, 4, 5]
+    neighbors: [1, 2, 3, 4, 5]
   uav1:
-    neighbors: [0, 2, 3, 4, 5]
+    neighbors: [2, 3, 4, 5]
   uav2:
-    neighbors: [3, 4, 5]
-  uav3:
-    neighbors: [4, 5]
-  uav4:
     neighbors: []
+  uav3:
+    neighbors: [2, 4, 5]
+  uav4:
+    neighbors: [2]
   uav5:
-    neighbors: [4]
+    neighbors: [2, 4]

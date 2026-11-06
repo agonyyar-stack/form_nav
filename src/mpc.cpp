@@ -51,8 +51,8 @@ Mpc::Mpc() {
     yaw_ref_ = 0.0;                              // yaw 参考：由 solve() 按 s_N 方向更新
     yaw_lock_dist_ = 0.3;                        // 终点范围 yaw 冻结距离 (m)
     has_rolling_goal_ = false;
-    // 编队误差权重：与子目标惩罚权重 Q_ 拆分为独立项，默认比 Q_ 小一个数量级
-    Q_f_ = DM::diag(DM{2000, 2000, 1000, 10});
+    // 编队误差权重：与子目标惩罚权重 Q_ 拆分为独立项，只约束位置，yaw 保持自由
+    Q_f_ = DM::diag(DM{50, 50, 25, 0});
     //运动学参数（yaw 与线速度解耦的一阶系统，精确离散化见 updateDiscreteModel）
     tau_v_ = 0.8;   // 线速度一阶时间常数 (s)
     tau_w_ = 0.5;   // 偏航角速度一阶时间常数 (s)
@@ -444,7 +444,12 @@ ErrorTerms Mpc::formationError(int k_step, MX reference_state, std::map<int, MX>
     // 两者不再耦合，避免“编队误差与路径跟踪打架”导致振荡。
     (void)reference_state;
 
-    // 输出
+    // 输出：按邻居数量取平均，避免邻居较多的无人机获得过强的等效编队权重。
+    // 当前拓扑为有向完全图，各节点的邻居数不同；若不归一化，uav1 的编队
+    // 代价约为 uav5 的 5 倍，容易导致各机形成不同的有效 w_form。
+    if (!neighbor_params.empty()) {
+        S1_accum = S1_accum / static_cast<double>(neighbor_params.size());
+    }
     ret.S1       = S1_accum;
     // LMPC 暂未启用。保留接口并提供零占位量，避免将来误调用时使用
     // 未构造的 CasADi 表达式。
@@ -830,7 +835,10 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
             if (k >= 1) {
                 cost += MX::mtimes({subgoal_err.T(), Q_int_, subgoal_err});
             }
-            cost += MX::mtimes({S_f.T(), Q_f_, S_f});
+            // k=0 的状态固定为当前状态，该步编队代价不提供优化梯度，跳过。
+            if (k >= 1) {
+                cost += MX::mtimes({S_f.T(), Q_f_, S_f});
+            }
             
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k}); // 控制输入惩罚
