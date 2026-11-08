@@ -1,0 +1,65 @@
+version: 1
+frame_id: world
+scene:
+  left_x: -20.0
+  center_y: 0.0
+  size_x: 30.0
+  size_y: 10.0
+  size_z: 3.0
+  resolution: 0.1
+static_obstacles:
+- id: 0
+  shape: cylinder
+  x: -10.366047745358088
+  y: 3.3156498673740047
+  radius: 0.66484658451394
+  height: 3.0
+- id: 1
+  shape: cylinder
+  x: -2.9549071618037166
+  y: -0.816976127320955
+  radius: 0.2604336914298892
+  height: 3.0
+- id: 2
+  shape: cylinder
+  x: -16.503978779840853
+  y: 2.9761273209549057
+  radius: 0.7147446066036838
+  height: 3.0
+- id: 3
+  shape: cylinder
+  x: 1.5225464190981435
+  y: -3.3846153846153846
+  radius: 0.8145957260541135
+  height: 3.0
+- id: 4
+  shape: cylinder
+  x: -13.22546419098143
+  y: -4.037135278514588
+  radius: 0.5
+  height: 3.0
+- id: 5
+  shape: cylinder
+  x: 1.9787798408488069
+  y: 3.13527851458886
+  radius: 0.5
+  height: 3.0
+- id: 6
+  shape: cylinder
+  x: -8.557029177718832
+  y: -3.2148541114058355
+  radius: 0.14649019916693953
+  height: 3.0
+- id: 7
+  shape: cylinder
+  x: 7.883289124668434
+  y: 2.8965517241379306
+  radius: 0.16984414422898822
+  height: 3.0
+- id: 8
+  shape: cylinder
+  x: 7.03978779840849
+  y: -2.6896551724137927
+  radius: 0.5
+  height: 3.0
+dynamic_obstacles: []

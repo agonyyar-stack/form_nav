@@ -7,6 +7,7 @@
 #include <iostream>
 #include <chrono>
 #include <map>
+#include <set>
 
 using namespace std;
 using namespace casadi;
@@ -80,6 +81,15 @@ private: //存储了 MPC 算法运行时的配置和状态
     int my_id_;
     // 所有无人机的编队偏移量 {id → [x, y, z, yaw]}
     std::map<int, std::vector<double>> formation_offsets_;
+    // 重心编队：跟随者相对领导者的非负凸组合权重。
+    bool use_barycentric_ = false;
+    std::vector<int> leader_ids_;
+    std::map<int, double> bary_weights_;
+    // 机间避碰只对显式配置的邻居生效；为空时表示保持原有行为。
+    bool collision_neighbor_filter_enabled_ = false;
+    std::set<int> collision_neighbor_ids_;
+    // 领导者使用全局路径参考；重心 follower 直接跟踪领导者凸组合。
+    bool is_leader_ = true;
 
     //平滑切换函数参数
     double h_bar;
@@ -155,6 +165,7 @@ private: //存储了 MPC 算法运行时的配置和状态
     int ipopt_max_iter_;  // IPOPT 最大迭代次数（可调，避障势垒陡峭时可加大）
     double built_ipopt_tol_;
     double ipopt_tol_;    // IPOPT 收敛容差（可调）
+    bool built_is_leader_;
 
     // 反步法控制器增益参数
     DM k1; // ki,1
@@ -189,6 +200,12 @@ private: //存储了 MPC 算法运行时的配置和状态
     bool buildWarmStart(const Eigen::VectorXd& current_states,
                         const std::vector<GlobalWaypoint>& targets,
                         Eigen::MatrixXd& out_x, Eigen::MatrixXd& out_u);
+
+    /// 由领导者数值预测轨迹生成 follower 的逐点重心参考。
+    bool buildBarycentricReference(
+        const std::vector<UavState>& neighbors,
+        const Eigen::VectorXd& current_states,
+        std::vector<GlobalWaypoint>& targets) const;
 public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     Mpc();
     ~Mpc();
@@ -200,6 +217,14 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     void setMyId(int id) { my_id_ = id; }
     /// 设置编队偏移量表
     void setFormationOffsets(const std::map<int, std::vector<double>>& offsets) { formation_offsets_ = offsets; }
+    /// 设置重心编队领导者及本机相对各领导者的权重；仅 follower 调用。
+    void setBarycentricFormation(
+        const std::vector<int>& leader_ids,
+        const std::map<int, double>& weights);
+    /// 设置参与机间避碰代价的邻居白名单；与编队领导者订阅集合解耦。
+    void setCollisionNeighbors(const std::vector<int>& neighbor_ids);
+    /// 设置是否使用全局路径参考；false 时 follower 必须使用重心编队模式。
+    void setFormationRole(bool is_leader) { is_leader_ = is_leader; }
 
     // --- 可参数化的 MPC 配置 ---
     /// 设置预测步长 (horizon)
@@ -291,6 +316,11 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
     bool generateStepTargets(double s0, double v_tan,
                              std::vector<GlobalWaypoint>& targets);
 
+    /// 计算第 k 个预测步的重心编队目标位置 p* = Σ w_l p_l。
+    /// 领导者轨迹或权重不完整时返回空 MX，由调用方进入安全降级。
+    MX barycentricTarget(int k_step,
+                         const std::map<int, MX>& neighbor_params) const;
+
     ErrorTerms formationError(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states); //编队误差
 
     MX ViLmpcDot(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states, MX U_k); //李雅普诺夫函数导数
@@ -321,7 +351,8 @@ public: //外部程序（如 ROS 节点）与 MPC 算法交互的方式
 
     bool solve(double s0, const std::vector<UavState>& neighbors,
                const std::vector<DynamicObstacleState>& dyn_obs,
-               Eigen::VectorXd current_states); //求解优化问题
+               Eigen::VectorXd current_states,
+               const Eigen::Vector3d& final_goal); //求解优化问题
 
     vector<double> getFirstU(); //最优控制序列中的第一个控制量
     vector<double> getPredictX(); //最优状态序列

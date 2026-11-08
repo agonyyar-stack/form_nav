@@ -72,6 +72,15 @@ nav_msgs::Path traveled_path;  // 累积已走过的位置
 // --- 邻居 + MPC ---
 std::unique_ptr<Mpc> mpc_ptr;
 std::vector<int> required_neighbor_ids;
+std::vector<int> formation_leader_ids;
+
+bool is_formation_leader = true;
+bool is_formation_follower = false;
+Eigen::Vector3d own_formation_offset = Eigen::Vector3d::Zero();
+
+Eigen::Vector3d mission_goal_world = Eigen::Vector3d::Zero();
+Eigen::Vector3d formation_goal_world = Eigen::Vector3d::Zero();
+bool has_mission_goal = false;
 
 struct NeighborTrajectoryCache {
     Eigen::MatrixXd predicted_states;
@@ -209,6 +218,34 @@ void globalTrajCallback(const form_nav::GlobalTrajectory::ConstPtr& msg) {
     mpc_ptr->setGlobalTrajectory(global_traj);
     ROS_INFO("%s: received global trajectory %u with %zu waypoints",
              UAV_NAME.c_str(), current_trajectory_id, global_traj.size());
+}
+
+// 所有 MPC 节点都保存用户任务目标。领导者由 A* 生成路径；follower 只使用
+// 目标加自身标称偏移作为制动和到达判断，不据此生成独立全局路径。
+void missionGoalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    geometry_msgs::PoseStamped goal = *msg;
+    if (goal.header.frame_id.empty()) {
+        goal.header.frame_id = WORLD_FRAME;
+    }
+    try {
+        goal = tf_buffer_ptr->transform(
+            goal, WORLD_FRAME, ros::Duration(0.05));
+    } catch (const tf2::TransformException& error) {
+        ROS_WARN_THROTTLE(2.0, "%s: cannot transform mission goal to %s: %s",
+                          UAV_NAME.c_str(), WORLD_FRAME.c_str(), error.what());
+        return;
+    }
+
+    mission_goal_world = Eigen::Vector3d(
+        goal.pose.position.x, goal.pose.position.y, 1.0);
+    formation_goal_world = mission_goal_world + own_formation_offset;
+    has_mission_goal = true;
+    if (is_formation_follower) {
+        arrived_hold_ = false;
+    }
+    ROS_INFO("%s: mission goal=(%.2f, %.2f), formation goal=(%.2f, %.2f)",
+             UAV_NAME.c_str(), mission_goal_world.x(), mission_goal_world.y(),
+             formation_goal_world.x(), formation_goal_world.y());
 }
 
 // ========== 里程计回调 ==========
@@ -536,6 +573,46 @@ bool buildAlignedNeighborStates(const ros::Time& prediction_start,
     return true;
 }
 
+bool formationLeadersAreStationary(const ros::Time& now) {
+    if (!is_formation_follower) {
+        return true;
+    }
+    if (formation_leader_ids.size() != 3) {
+        return false;
+    }
+
+    for (int leader_id : formation_leader_ids) {
+        const auto cached = neighbor_trajectories.find(leader_id);
+        if (cached == neighbor_trajectories.end()) {
+            return false;
+        }
+        const NeighborTrajectoryCache& trajectory = cached->second;
+        const double age = (now - trajectory.prediction_start).toSec();
+        if (age > NEIGHBOR_TRAJECTORY_TIMEOUT ||
+            age < -NEIGHBOR_FUTURE_TOLERANCE ||
+            trajectory.predicted_states.rows() != 8 ||
+            trajectory.predicted_states.cols() == 0) {
+            return false;
+        }
+
+        const int last_col =
+            static_cast<int>(trajectory.predicted_states.cols()) - 1;
+        for (int col : {0, last_col}) {
+            const double speed = std::sqrt(
+                trajectory.predicted_states(4, col) *
+                    trajectory.predicted_states(4, col) +
+                trajectory.predicted_states(5, col) *
+                    trajectory.predicted_states(5, col) +
+                trajectory.predicted_states(6, col) *
+                    trajectory.predicted_states(6, col));
+            if (!std::isfinite(speed) || speed >= ARRIVAL_VELOCITY) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 void publishHoldCommand() {
     geometry_msgs::TwistStamped hold_cmd;
     hold_cmd.header.stamp = ros::Time::now();
@@ -550,10 +627,22 @@ void publishHoldPositionSetpoint(const ros::Time& stamp) {
     geometry_msgs::PoseStamped hold_pose;
     hold_pose.header.stamp = stamp;
     hold_pose.header.frame_id = WORLD_FRAME;
-    // 分布式规划：轨迹末端已是本机物理目标，不再叠加编队偏移。
-    hold_pose.pose.position.x = global_traj.back().x;
-    hold_pose.pose.position.y = global_traj.back().y;
-    hold_pose.pose.position.z = global_traj.back().z;
+    Eigen::Vector3d hold_position = formation_goal_world;
+    if (is_formation_leader) {
+        if (!global_traj_received || global_traj.empty()) {
+            publishHoldCommand();
+            return;
+        }
+        // 领导者路径末端已经是包含其标称偏移的物理目标。
+        hold_position = Eigen::Vector3d(
+            global_traj.back().x, global_traj.back().y, global_traj.back().z);
+    } else if (!has_mission_goal) {
+        publishHoldCommand();
+        return;
+    }
+    hold_pose.pose.position.x = hold_position.x();
+    hold_pose.pose.position.y = hold_position.y();
+    hold_pose.pose.position.z = hold_position.z();
     tf2::Quaternion hold_yaw;
     hold_yaw.setRPY(0.0, 0.0, current_mpc_state(3));
     hold_pose.pose.orientation = tf2::toMsg(hold_yaw);
@@ -604,7 +693,13 @@ void controlLoop(const ros::TimerEvent&) {
     // 位置 setpoint，使 PX4 保持在地面不起飞，触发
     // "Disarmed by auto preflight disarming"（解锁后 2 秒内无起飞自动上锁）。
     // 因此起飞/悬停阶段完全交给 uav_base 的位置 setpoint 兜底。
-    if (!has_odom || !global_traj_received) {
+    if (!has_odom) {
+        return;
+    }
+    if (is_formation_leader && !global_traj_received) {
+        return;
+    }
+    if (is_formation_follower && !has_mission_goal) {
         return;
     }
 
@@ -613,16 +708,20 @@ void controlLoop(const ros::TimerEvent&) {
     // （累积弧长 s0），供逐点参考的梯形剖面生成使用。
     const Eigen::Vector3d current_pos(
         current_mpc_state(0), current_mpc_state(1), current_mpc_state(2));
-    const double s0 = mpc_ptr->projectToPath(current_pos);
+    const double s0 = is_formation_leader
+                          ? mpc_ptr->projectToPath(current_pos)
+                          : 0.0;
 
     // ========== 到达终点检测：锁定悬停，避免原地振荡 ==========
-    // 每架无人机的停靠目标就是自己轨迹的末端（物理坐标）。
+    // 领导者使用全局轨迹末端；重心 follower 使用任务目标加自身标称偏移。
     // 一旦满足条件即锁定（arrived_hold_），之后持续悬停不再回 MPC 求解，
     // 避免在阈值附近悬停/振荡反复切换；收到新轨迹时由 globalTrajCallback 解锁。
     // 到达判定 = 到终点直线距离 < arrival_distance 且 3D 速度 < arrival_velocity。
-    const Eigen::Vector3d traj_end(global_traj.back().x,
-                                   global_traj.back().y,
-                                   global_traj.back().z);
+    const Eigen::Vector3d traj_end = is_formation_leader
+        ? Eigen::Vector3d(global_traj.back().x,
+                          global_traj.back().y,
+                          global_traj.back().z)
+        : formation_goal_world;
     const double end_dist = (current_pos - traj_end).norm();
     const double speed = std::hypot(vel_world_x, vel_world_y, vel_world_z);
 
@@ -631,7 +730,8 @@ void controlLoop(const ros::TimerEvent&) {
         publishStationaryPrediction(solve_stamp);
         return;
     }
-    if (end_dist < ARRIVAL_DISTANCE && speed < ARRIVAL_VELOCITY) {
+    if (end_dist < ARRIVAL_DISTANCE && speed < ARRIVAL_VELOCITY &&
+        formationLeadersAreStationary(solve_stamp)) {
         arrived_hold_ = true;
         ROS_INFO("%s: reached trajectory end (dist=%.2f m, speed=%.2f m/s), "
                  "locking hold.",
@@ -696,7 +796,8 @@ void controlLoop(const ros::TimerEvent&) {
     buildAlignedDynamicObstacles(solve_stamp, dyn_obs_vec);
 
     // 求解 MPC (t0 = 最近点时间)
-    bool ok = mpc_ptr->solve(s0, neighbors_vec, dyn_obs_vec, current_mpc_state);
+    bool ok = mpc_ptr->solve(
+        s0, neighbors_vec, dyn_obs_vec, current_mpc_state, traj_end);
     // 可视化
     if (ok) {
         auto u = mpc_ptr->getFirstU(); // 惯性系线速度指令 + yaw rate 指令
@@ -1035,15 +1136,53 @@ int main(int argc, char **argv) {
     const FormationConfig formation = FormationConfig::load(
         nh, formation_config_namespace, my_id);
     const std::vector<int>& neighbor_ids = formation.neighbor_ids;
+    const bool barycentric_mode =
+        formation.formation_mode == "barycentric";
+    const bool is_barycentric_leader =
+        barycentric_mode && formation.isLeader(my_id);
+    const bool is_barycentric_follower =
+        barycentric_mode && formation.isFollower(my_id);
+    if (barycentric_mode && !is_barycentric_leader &&
+        !is_barycentric_follower) {
+        throw std::runtime_error(
+            "barycentric mode requires every UAV to be a leader or follower");
+    }
+
+    is_formation_follower = is_barycentric_follower;
+    is_formation_leader = !is_formation_follower;
+    formation_leader_ids = formation.leader_ids;
+    const std::vector<double>& own_offset = formation.offsets.at(my_id);
+    own_formation_offset =
+        Eigen::Vector3d(own_offset[0], own_offset[1], own_offset[2]);
+
     required_neighbor_ids = neighbor_ids;
-    ROS_INFO("%s: neighbors=%zu, offsets=%zu",
+    if (is_barycentric_follower) {
+        for (int leader_id : formation.leader_ids) {
+            if (std::find(required_neighbor_ids.begin(),
+                          required_neighbor_ids.end(), leader_id) ==
+                required_neighbor_ids.end()) {
+                required_neighbor_ids.push_back(leader_id);
+            }
+        }
+    }
+    ROS_INFO("%s: mode=%s role=%s neighbors=%zu required_neighbors=%zu offsets=%zu",
              UAV_NAME.c_str(),
-             neighbor_ids.size(), formation.offsets.size());
+             formation.formation_mode.c_str(),
+             is_barycentric_leader ? "leader" :
+                 (is_barycentric_follower ? "follower" : "unified"),
+             neighbor_ids.size(), required_neighbor_ids.size(),
+             formation.offsets.size());
 
     // --- MPC 初始化 ---
     mpc_ptr.reset(new Mpc());
     mpc_ptr->setMyId(my_id);
     mpc_ptr->setFormationOffsets(formation.offsets);
+    mpc_ptr->setCollisionNeighbors(neighbor_ids);
+    mpc_ptr->setFormationRole(is_formation_leader);
+    if (is_barycentric_follower) {
+        mpc_ptr->setBarycentricFormation(
+            formation.leader_ids, formation.weights.at(my_id));
+    }
 
     mpc_ptr->setPredictionHorizon(N);
     mpc_ptr->setTimeStep(dt);
@@ -1082,8 +1221,16 @@ int main(int argc, char **argv) {
     // 编队误差权重：独立于子目标惩罚权重，作为避障优先下的软队形约束，
     // yaw 通道恒为 0 —— yaw 只跟踪各自速度/终端参考方向，编队误差不再拉齐机头，
     // 避免与 yaw 参考打架。
-    mpc_ptr->setFormationErrorWeight(
-        DM::diag(DM{w_form, w_form, w_form / 2.0, 0.0}));
+    if (is_barycentric_leader) {
+        mpc_ptr->setFormationErrorWeight(
+            DM::diag(DM{0.0, 0.0, 0.0, 0.0}));
+    } else if (is_barycentric_follower) {
+        mpc_ptr->setFormationErrorWeight(
+            DM::diag(DM{w_form, w_form, w_form, 0.0}));
+    } else {
+        mpc_ptr->setFormationErrorWeight(
+            DM::diag(DM{w_form, w_form, w_form / 2.0, 0.0}));
+    }
     // 终端子目标惩罚权重（原 Q_）：位置 x:y:z = 1:1:0.5；
     // yaw 通道用独立参数 w_yaw（默认 1000，约为位置权重的 1/20），
     // 复用现有终端软约束跟踪 s_N 方向，不新增代价项。
@@ -1132,9 +1279,17 @@ int main(int argc, char **argv) {
     ros::Subscriber odom_sub = nh.subscribe<nav_msgs::Odometry>(
         "/" + UAV_NAME + "/mavros/local_position/odom", 10, odomCallback);
 
-    // 全局轨迹订阅
-    ros::Subscriber global_traj_sub = nh.subscribe<form_nav::GlobalTrajectory>(
-        "/" + UAV_NAME + "/global_trajectory", 1, globalTrajCallback);
+    // 只有领导者消费全局轨迹；重心 follower 不保留独立规划路径。
+    ros::Subscriber global_traj_sub;
+    if (is_formation_leader) {
+        global_traj_sub = nh.subscribe<form_nav::GlobalTrajectory>(
+            "/" + UAV_NAME + "/global_trajectory", 1, globalTrajCallback);
+    }
+
+    // 用户任务目标所有节点都接收，但 follower 只用于末端制动和到达判定。
+    ros::Subscriber mission_goal_sub =
+        nh.subscribe<geometry_msgs::PoseStamped>(
+            "/move_base_simple/goal", 10, missionGoalCallback);
 
     // 第三步：障碍物点云（仿真阶段为全局真值点云，后续可换感知 local cloud）
     ros::Subscriber obstacle_cloud_sub = nh.subscribe<sensor_msgs::PointCloud2>(
@@ -1142,7 +1297,7 @@ int main(int argc, char **argv) {
 
     // 动态订阅邻居
     std::vector<ros::Subscriber> neighbor_subs;
-    for (int nid : neighbor_ids) {
+    for (int nid : required_neighbor_ids) {
         std::string topic = "/uav" + std::to_string(nid) + "/predicted_path_share";
         neighbor_subs.push_back(nh.subscribe<form_nav::PredictedTrajectory>(
             topic, 10,

@@ -34,8 +34,8 @@
         <arg name="fcu_remote_port" default="$(eval 14580 + arg('ID'))"/> <!-- PX4 SITL 监听端口 -->
         <arg name="fcu_url" default="udp://:$(arg fcu_local_port)@localhost:$(arg fcu_remote_port)"/>
         <!-- 初始三角形队形，以 (-23.0, -1.5) 为编队基准。 -->
-        <arg name="x" value="-23.0"/>
-        <arg name="y" value="-1.5"/>
+        <arg name="x" value="-23.4"/>
+        <arg name="y" value="-2.5"/>
         <arg name="z" value="0"/>
         <arg name="R" value="0"/>
         <arg name="P" value="0"/>
@@ -76,8 +76,8 @@
         <arg name="fcu_local_port" default="$(eval 14540 + arg('ID'))"/>
         <arg name="fcu_remote_port" default="$(eval 14580 + arg('ID'))"/>
         <arg name="fcu_url" default="udp://:$(arg fcu_local_port)@localhost:$(arg fcu_remote_port)"/>
-        <arg name="x" value="-23.0"/>
-        <arg name="y" value="1.5"/>
+        <arg name="x" value="-24.2"/>
+        <arg name="y" value="-3.5"/>
         <arg name="z" value="0"/>
         <arg name="R" value="0"/>
         <arg name="P" value="0"/>
@@ -120,8 +120,8 @@
         <arg name="fcu_local_port" default="$(eval 14540 + arg('ID'))"/>
         <arg name="fcu_remote_port" default="$(eval 14580 + arg('ID'))"/>
         <arg name="fcu_url" default="udp://:$(arg fcu_local_port)@localhost:$(arg fcu_remote_port)"/>
-        <arg name="x" value="-21.0"/>
-        <arg name="y" value="0.0"/>
+        <arg name="x" value="-22.6"/>
+        <arg name="y" value="-1.5"/>
         <arg name="z" value="0"/>
         <arg name="R" value="0"/>
         <arg name="P" value="0"/>
@@ -161,8 +161,8 @@
         <arg name="fcu_local_port" default="$(eval 14540 + arg('ID'))"/>
         <arg name="fcu_remote_port" default="$(eval 14580 + arg('ID'))"/>
         <arg name="fcu_url" default="udp://:$(arg fcu_local_port)@localhost:$(arg fcu_remote_port)"/>
-        <arg name="x" value="-22.9"/>
-        <arg name="y" value="0.0"/>
+        <arg name="x" value="-21.8"/>
+        <arg name="y" value="-1.5"/>
         <arg name="z" value="0"/>
         <arg name="R" value="0"/>
         <arg name="P" value="0"/>
@@ -202,8 +202,8 @@
         <arg name="fcu_local_port" default="$(eval 14540 + arg('ID'))"/>
         <arg name="fcu_remote_port" default="$(eval 14580 + arg('ID'))"/>
         <arg name="fcu_url" default="udp://:$(arg fcu_local_port)@localhost:$(arg fcu_remote_port)"/>
-        <arg name="x" value="-22.0"/>
-        <arg name="y" value="0.7"/>
+        <arg name="x" value="-23.4"/>
+        <arg name="y" value="-0.5"/>
         <arg name="z" value="0"/>
         <arg name="R" value="0"/>
         <arg name="P" value="0"/>
@@ -243,8 +243,8 @@
         <arg name="fcu_local_port" default="$(eval 14540 + arg('ID'))"/>
         <arg name="fcu_remote_port" default="$(eval 14580 + arg('ID'))"/>
         <arg name="fcu_url" default="udp://:$(arg fcu_local_port)@localhost:$(arg fcu_remote_port)"/>
-        <arg name="x" value="-22.0"/>
-        <arg name="y" value="-0.7"/>
+        <arg name="x" value="-24.2"/>
+        <arg name="y" value="0.5"/>
         <arg name="z" value="0"/>
         <arg name="R" value="0"/>
         <arg name="P" value="0"/>

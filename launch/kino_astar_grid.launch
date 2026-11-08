@@ -7,6 +7,7 @@
        default="$(find form_nav)/config/formations.yaml" />
   <arg name="formation_config_namespace" default="/formation_config" />
   <arg name="load_formation_config" default="true" />
+  <arg name="enable_global_planner" default="true" />
 
   <!-- 从 yaml 加载编队配置（父 launch 已加载时可传 false） -->
   <group if="$(arg load_formation_config)">
@@ -21,7 +22,9 @@
     <param name="output_topic" value="/$(arg uav_id)/mavros/local_position/odom_world" />
   </node>
 
-  <node name="$(arg uav_id)_kino_astar_node" pkg="form_nav" type="kino_astar_node" output="screen">
+  <node if="$(arg enable_global_planner)"
+        name="$(arg uav_id)_kino_astar_node" pkg="form_nav"
+        type="kino_astar_node" output="screen">
     <param name="world_frame" value="$(arg world_frame)" />
     <param name="my_id" value="$(arg my_id)" />
     <param name="formation_config_namespace" value="$(arg formation_config_namespace)" />

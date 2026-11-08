@@ -1,5 +1,7 @@
 #include "form_nav/formation_config.h"
 
+#include <algorithm>
+#include <cmath>
 #include <set>
 #include <stdexcept>
 
@@ -43,6 +45,19 @@ double parseNumber(XmlRpc::XmlRpcValue& value, const std::string& context) {
 }
 
 }  // namespace
+
+bool FormationConfig::isLeader(int id) const {
+    return std::find(leader_ids.begin(), leader_ids.end(), id) !=
+           leader_ids.end();
+}
+
+bool FormationConfig::isFollower(int id) const {
+    return !isLeader(id) && hasWeights(id);
+}
+
+bool FormationConfig::hasWeights(int id) const {
+    return weights.count(id) != 0;
+}
 
 FormationConfig FormationConfig::load(const ros::NodeHandle& node_handle,
                                       const std::string& config_namespace,
@@ -138,6 +153,148 @@ FormationConfig FormationConfig::load(const ros::NodeHandle& node_handle,
                                      std::to_string(neighbor_id));
         }
         config.neighbor_ids.push_back(neighbor_id);
+    }
+
+    const std::string mode_path = parameterPath(config_namespace, "formation_mode");
+    if (!node_handle.getParam(mode_path, config.formation_mode)) {
+        config.formation_mode = "offset";
+    }
+    if (config.formation_mode != "offset" &&
+        config.formation_mode != "barycentric") {
+        throw std::runtime_error(
+            mode_path + ": expected 'offset' or 'barycentric'");
+    }
+
+    if (config.formation_mode == "offset") {
+        return config;
+    }
+
+    const std::string leaders_path = parameterPath(config_namespace, "leaders");
+    XmlRpc::XmlRpcValue leaders_value;
+    if (!node_handle.getParam(leaders_path, leaders_value) ||
+        leaders_value.getType() != XmlRpc::XmlRpcValue::TypeArray) {
+        throw std::runtime_error(
+            leaders_path + ": barycentric mode requires an integer array");
+    }
+
+    std::set<int> unique_leaders;
+    for (int index = 0; index < leaders_value.size(); ++index) {
+        if (leaders_value[index].getType() != XmlRpc::XmlRpcValue::TypeInt) {
+            throw std::runtime_error(leaders_path + ": IDs must be integers");
+        }
+        const int leader_id = static_cast<int>(leaders_value[index]);
+        if (config.offsets.count(leader_id) == 0) {
+            throw std::runtime_error(
+                leaders_path + ": no offset configured for leader uav" +
+                std::to_string(leader_id));
+        }
+        if (!unique_leaders.insert(leader_id).second) {
+            throw std::runtime_error(
+                leaders_path + ": duplicate id " + std::to_string(leader_id));
+        }
+        config.leader_ids.push_back(leader_id);
+    }
+    if (config.leader_ids.size() != 3) {
+        throw std::runtime_error(
+            leaders_path + ": barycentric mode requires exactly three leaders");
+    }
+
+    const std::vector<double>& p0 = config.offsets.at(config.leader_ids[0]);
+    const std::vector<double>& p1 = config.offsets.at(config.leader_ids[1]);
+    const std::vector<double>& p2 = config.offsets.at(config.leader_ids[2]);
+    const double triangle_cross =
+        (p1[0] - p0[0]) * (p2[1] - p0[1]) -
+        (p1[1] - p0[1]) * (p2[0] - p0[0]);
+    if (std::abs(triangle_cross) < 1e-6) {
+        throw std::runtime_error(
+            leaders_path + ": leader triangle is degenerate in the xy plane");
+    }
+
+    const std::string weights_path = parameterPath(config_namespace, "weights");
+    XmlRpc::XmlRpcValue weights_value;
+    if (!node_handle.getParam(weights_path, weights_value) ||
+        weights_value.getType() != XmlRpc::XmlRpcValue::TypeStruct) {
+        throw std::runtime_error(
+            weights_path + ": barycentric mode requires a UAV-to-weight mapping");
+    }
+
+    for (auto it = weights_value.begin(); it != weights_value.end(); ++it) {
+        const int follower_id = parseAgentId(it->first, weights_path);
+        if (config.offsets.count(follower_id) == 0) {
+            throw std::runtime_error(
+                weights_path + "/" + it->first + ": no matching offset");
+        }
+        if (unique_leaders.count(follower_id) != 0) {
+            throw std::runtime_error(
+                weights_path + "/" + it->first +
+                ": a leader cannot have follower weights");
+        }
+        if (it->second.getType() != XmlRpc::XmlRpcValue::TypeStruct) {
+            throw std::runtime_error(
+                weights_path + "/" + it->first +
+                ": expected a leader-to-weight mapping");
+        }
+
+        std::map<int, double> follower_weights;
+        std::set<int> configured_leaders;
+        double weight_sum = 0.0;
+        for (auto jt = it->second.begin(); jt != it->second.end(); ++jt) {
+            const int leader_id =
+                parseAgentId(jt->first, weights_path + "/" + it->first);
+            if (unique_leaders.count(leader_id) == 0) {
+                throw std::runtime_error(
+                    weights_path + "/" + it->first + "/" + jt->first +
+                    ": key is not a configured leader");
+            }
+            const double weight = parseNumber(
+                jt->second, weights_path + "/" + it->first + "/" + jt->first);
+            if (!std::isfinite(weight) || weight < 0.0) {
+                throw std::runtime_error(
+                    weights_path + "/" + it->first + "/" + jt->first +
+                    ": weight must be finite and non-negative");
+            }
+            follower_weights[leader_id] = weight;
+            configured_leaders.insert(leader_id);
+            weight_sum += weight;
+        }
+
+        if (configured_leaders != unique_leaders) {
+            throw std::runtime_error(
+                weights_path + "/" + it->first +
+                ": every leader must have exactly one weight");
+        }
+        if (std::abs(weight_sum - 1.0) > 1e-6) {
+            throw std::runtime_error(
+                weights_path + "/" + it->first +
+                ": weights must sum to one");
+        }
+
+        const std::vector<double>& follower_offset =
+            config.offsets.at(follower_id);
+        for (int axis = 0; axis < 3; ++axis) {
+            double reconstructed = 0.0;
+            for (int leader_id : config.leader_ids) {
+                reconstructed +=
+                    follower_weights.at(leader_id) *
+                    config.offsets.at(leader_id)[axis];
+            }
+            if (std::abs(reconstructed - follower_offset[axis]) > 1e-4) {
+                throw std::runtime_error(
+                    weights_path + "/" + it->first +
+                    ": weights do not reconstruct the nominal offset");
+            }
+        }
+
+        config.weights[follower_id] = std::move(follower_weights);
+    }
+
+    for (const auto& [id, offset] : config.offsets) {
+        (void)offset;
+        if (unique_leaders.count(id) == 0 && config.weights.count(id) == 0) {
+            throw std::runtime_error(
+                weights_path + ": missing weights for follower uav" +
+                std::to_string(id));
+        }
     }
 
     return config;

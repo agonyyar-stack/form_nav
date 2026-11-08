@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 namespace {
 // 点-线段最短距离平方（C++ 侧查询用，折线最近线段选择）
@@ -101,6 +102,7 @@ Mpc::Mpc() {
     built_k_ca_ = -1.0;
     built_ipopt_max_iter_ = -1;
     built_ipopt_tol_ = -1.0;
+    built_is_leader_ = false;
     // 机间避碰 softplus 势垒参数（有效间距口径 = 中心距 − 2r）
     d_safe_ca = 0.75; // 编队内安全距离下限 L (m)，softplus 下参与 d_scale 归一化
     d_act_ca = 1.6;   // 机间避碰势垒中心距离 D̄ (m)，即 softplus 的 d_bar
@@ -113,6 +115,55 @@ Mpc::Mpc() {
     has_global_traj_ = false;
 }
 Mpc::~Mpc() {}
+
+void Mpc::setBarycentricFormation(
+    const std::vector<int>& leader_ids,
+    const std::map<int, double>& weights) {
+    if (leader_ids.size() != 3) {
+        throw std::invalid_argument(
+            "barycentric formation requires exactly three leaders");
+    }
+    if (weights.size() != leader_ids.size()) {
+        throw std::invalid_argument(
+            "barycentric formation requires one weight per leader");
+    }
+
+    std::vector<int> unique_ids;
+    unique_ids.reserve(leader_ids.size());
+    double weight_sum = 0.0;
+    for (int leader_id : leader_ids) {
+        if (std::find(unique_ids.begin(), unique_ids.end(), leader_id) !=
+            unique_ids.end()) {
+            throw std::invalid_argument(
+                "barycentric formation leader ids must be unique");
+        }
+        const auto weight_it = weights.find(leader_id);
+        if (weight_it == weights.end()) {
+            throw std::invalid_argument(
+                "barycentric formation is missing a leader weight");
+        }
+        if (!std::isfinite(weight_it->second) || weight_it->second < 0.0) {
+            throw std::invalid_argument(
+                "barycentric formation weights must be finite and non-negative");
+        }
+        unique_ids.push_back(leader_id);
+        weight_sum += weight_it->second;
+    }
+    if (std::abs(weight_sum - 1.0) > 1e-6) {
+        throw std::invalid_argument(
+            "barycentric formation weights must sum to one");
+    }
+
+    leader_ids_ = leader_ids;
+    bary_weights_ = weights;
+    use_barycentric_ = true;
+}
+
+void Mpc::setCollisionNeighbors(const std::vector<int>& neighbor_ids) {
+    collision_neighbor_filter_enabled_ = true;
+    collision_neighbor_ids_.clear();
+    collision_neighbor_ids_.insert(neighbor_ids.begin(), neighbor_ids.end());
+}
 
 // 重建精确离散化系数。连续模型（yaw 与线速度解耦）：
 //   ṗ = v_e,  v̇_e = (K_v v_c - v_e)/τ_v
@@ -376,8 +427,58 @@ bool Mpc::generateStepTargets(double s0, double v_tan,
     return true;
 }
 
+MX Mpc::barycentricTarget(
+    int k_step,
+    const std::map<int, MX>& neighbor_params) const {
+    if (!use_barycentric_ || leader_ids_.size() != 3) {
+        return MX();
+    }
+    if (k_step < 0 || k_step > N_) {
+        return MX();
+    }
+
+    MX p_star = MX::zeros(3, 1);
+    double weight_sum = 0.0;
+    for (int leader_id : leader_ids_) {
+        const auto weight_it = bary_weights_.find(leader_id);
+        const auto state_it = neighbor_params.find(leader_id);
+        if (weight_it == bary_weights_.end() ||
+            state_it == neighbor_params.end() ||
+            state_it->second.size1() != 8 ||
+            state_it->second.size2() <= k_step) {
+            return MX();
+        }
+
+        p_star += weight_it->second * state_it->second(Slice(0, 3), k_step);
+        weight_sum += weight_it->second;
+    }
+    if (!std::isfinite(weight_sum) || std::abs(weight_sum - 1.0) > 1e-6) {
+        return MX();
+    }
+    return p_star;
+}
+
 ErrorTerms Mpc::formationError(int k_step, MX reference_state, std::map<int, MX>& neighbor_params, MX current_states) {
     ErrorTerms ret;
+
+    if (use_barycentric_) {
+        MX p_i = current_states(Slice(0, 3));
+        MX p_star = barycentricTarget(k_step, neighbor_params);
+
+        // 领导者轨迹不完整时不给 MPC 注入错误梯度；节点层负责避免在
+        // 必需领导者缺失时继续求解。
+        ret.S1       = MX::zeros(4, 1);
+        ret.S1_dot   = MX::zeros(4, 1);
+        ret.S2       = MX::zeros(4, 1);
+        ret.sum_term = MX::zeros(4, 1);
+        if (p_star.is_empty()) {
+            return ret;
+        }
+
+        const MX position_error = p_i - p_star;
+        ret.S1(Slice(0, 3)) = position_error;
+        return ret;
+    }
 
     // 自身 UAV 状态
     MX p_i = current_states(Slice(0, 4));   // [x, y, z, psi] global
@@ -627,6 +728,10 @@ MX Mpc::collisionAvoidance(MX reference_state, int k_step, std::map<int, MX>& ne
     // 处处可导、无硬边界、近距惩罚抬升且梯度有界，替代 q_ca 对数势垒，
     // 避免机间距离逼近安全下限时势垒梯度剧变导致的求解失败/振荡。
     for (auto const& [j_id, j_param] : neighbor_params) {
+        if (collision_neighbor_filter_enabled_ &&
+            collision_neighbor_ids_.count(j_id) == 0) {
+            continue;
+        }
         MX y_j = j_param(Slice(0, 4), k_step);
         MX pos_j = y_j(Slice(0, 3));
 
@@ -779,7 +884,8 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
         std::abs(built_d_act_ca_ - d_act_ca) < 1e-9 &&
         std::abs(built_k_ca_ - k_ca_) < 1e-9 &&
         built_ipopt_max_iter_ == ipopt_max_iter_ &&
-        std::abs(built_ipopt_tol_ - ipopt_tol_) < 1e-12) {
+        std::abs(built_ipopt_tol_ - ipopt_tol_) < 1e-12 &&
+        built_is_leader_ == is_leader_) {
         return true;
     }
 
@@ -832,7 +938,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
         if (k < N_) {
             // 中间步子目标惩罚（链式逐点参考，独立小权重 Q_int_）：
             // k=0 由 X_0 == 当前状态约束固定，跳过；Q_int_ yaw 通道为 0
-            if (k >= 1) {
+            if (is_leader_ && k >= 1) {
                 cost += MX::mtimes({subgoal_err.T(), Q_int_, subgoal_err});
             }
             // k=0 的状态固定为当前状态，该步编队代价不提供优化梯度，跳过。
@@ -844,7 +950,9 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
             cost += MX::mtimes({U_k.T(), F_, U_k}); // 控制输入惩罚
         } else {
             // 终端子目标惩罚（Q_，独立于中间步 Q_int_）
-            cost += MX::mtimes({subgoal_err.T(), Q_, subgoal_err});
+            if (is_leader_) {
+                cost += MX::mtimes({subgoal_err.T(), Q_, subgoal_err});
+            }
             cost += MX::mtimes({S_f.T(), Q_f_, S_f});
         }
     }
@@ -934,6 +1042,7 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
     built_k_ca_ = k_ca_;
     built_ipopt_max_iter_ = ipopt_max_iter_;
     built_ipopt_tol_ = ipopt_tol_;
+    built_is_leader_ = is_leader_;
     has_last_solution_ = false;
     return true;
 }
@@ -1015,9 +1124,62 @@ bool Mpc::buildWarmStart(const Eigen::VectorXd& current_states,
     return true;
 }
 
+bool Mpc::buildBarycentricReference(
+    const std::vector<UavState>& neighbors,
+    const Eigen::VectorXd& current_states,
+    std::vector<GlobalWaypoint>& targets) const {
+    targets.clear();
+    if (!use_barycentric_ || leader_ids_.size() != 3 ||
+        current_states.size() != 8) {
+        return false;
+    }
+
+    targets.resize(N_ + 1);
+    for (int k = 0; k <= N_; ++k) {
+        Eigen::Vector3d p_star = Eigen::Vector3d::Zero();
+        double weight_sum = 0.0;
+        for (int leader_id : leader_ids_) {
+            const auto weight_it = bary_weights_.find(leader_id);
+            if (weight_it == bary_weights_.end()) {
+                return false;
+            }
+
+            const auto state_it = std::find_if(
+                neighbors.begin(), neighbors.end(),
+                [leader_id](const UavState& state) {
+                    return state.id == leader_id;
+                });
+            if (state_it == neighbors.end() ||
+                state_it->predicted_states.rows() != 8 ||
+                state_it->predicted_states.cols() != N_ + 1) {
+                return false;
+            }
+
+            p_star += weight_it->second *
+                      state_it->predicted_states.block<3, 1>(0, k);
+            weight_sum += weight_it->second;
+        }
+        if (!p_star.allFinite() || std::abs(weight_sum - 1.0) > 1e-6) {
+            return false;
+        }
+
+        GlobalWaypoint& target = targets[k];
+        target.x = p_star.x();
+        target.y = p_star.y();
+        target.z = p_star.z();
+        target.yaw = current_states(3);
+        target.vx = 0.0;
+        target.vy = 0.0;
+        target.vz = 0.0;
+        target.vyaw = 0.0;
+    }
+    return true;
+}
+
 bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
                 const std::vector<DynamicObstacleState>& dyn_obs,
-                Eigen::VectorXd current_states) {
+                Eigen::VectorXd current_states,
+                const Eigen::Vector3d& final_goal) {
     // 控制节点负责等待传感器和全局轨迹；这里再做一次尺寸检查，避免
     // 未初始化状态进入 CasADi 参数并产生难以定位的维度错误。
     if (current_states.size() != 8) {
@@ -1025,8 +1187,17 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
                   << current_states.size() << std::endl;
         return false;
     }
-    if (!has_global_traj_) {
+    if (!final_goal.allFinite()) {
+        std::cerr << "[MPC] Invalid final formation goal." << std::endl;
+        return false;
+    }
+    if (is_leader_ && !has_global_traj_) {
         std::cerr << "[MPC] Cannot solve without a global trajectory." << std::endl;
+        return false;
+    }
+    if (!is_leader_ && !use_barycentric_) {
+        std::cerr << "[MPC] Follower mode requires barycentric formation."
+                  << std::endl;
         return false;
     }
     if (nearest_obs_num_ <= 0) {
@@ -1043,28 +1214,33 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
     const Eigen::Vector3d v_cur(current_states(4), current_states(5),
                                 current_states(6));
 
-    // 逐点参考：从当前状态出发，沿剩余路径按梯形速度剖面（加速-巡航-刹停
-    // 包络）生成每一步的期望目标点。参考由与 MPC 相同的一阶离散系数推进，
-    // 自身满足 MPC 动力学；全局轨迹只提供几何形状，速度/时间信息由剖面
-    // 现场生成，每周期从当前实际状态重建。
-    // 剖面初速 = 当前速度沿路径切向的分量。
-    Eigen::Vector3d tangent = Eigen::Vector3d::UnitX();
-    constexpr double kArcEps = 1e-3;
-    const GlobalWaypoint wp_back = waypointAtArc(s0 - kArcEps);
-    const GlobalWaypoint wp_fwd = waypointAtArc(s0 + kArcEps);
-    const Eigen::Vector3d seg_dir(wp_fwd.x - wp_back.x,
-                                  wp_fwd.y - wp_back.y,
-                                  wp_fwd.z - wp_back.z);
-    if (seg_dir.norm() > 1e-6) {
-        tangent = seg_dir.normalized();
-    } else if (v_cur.norm() > 1e-3) {
-        tangent = v_cur.normalized();  // 路径退化（如单点）时退回当前速度方向
-    }
-    const double v_tan = v_cur.dot(tangent);
-
     std::vector<GlobalWaypoint> targets;
-    if (!generateStepTargets(s0, v_tan, targets)) {
-        std::cerr << "[MPC] Failed to generate step targets." << std::endl;
+    if (is_leader_) {
+        // 逐点参考：从当前状态出发，沿剩余路径按梯形速度剖面（加速-巡航-刹停
+        // 包络）生成每一步的期望目标点。参考由与 MPC 相同的一阶离散系数推进，
+        // 自身满足 MPC 动力学；全局轨迹只提供几何形状，速度/时间信息由剖面
+        // 现场生成，每周期从当前实际状态重建。
+        // 剖面初速 = 当前速度沿路径切向的分量。
+        Eigen::Vector3d tangent = Eigen::Vector3d::UnitX();
+        constexpr double kArcEps = 1e-3;
+        const GlobalWaypoint wp_back = waypointAtArc(s0 - kArcEps);
+        const GlobalWaypoint wp_fwd = waypointAtArc(s0 + kArcEps);
+        const Eigen::Vector3d seg_dir(wp_fwd.x - wp_back.x,
+                                      wp_fwd.y - wp_back.y,
+                                      wp_fwd.z - wp_back.z);
+        if (seg_dir.norm() > 1e-6) {
+            tangent = seg_dir.normalized();
+        } else if (v_cur.norm() > 1e-3) {
+            tangent = v_cur.normalized();  // 路径退化（如单点）时退回当前速度方向
+        }
+        const double v_tan = v_cur.dot(tangent);
+        if (!generateStepTargets(s0, v_tan, targets)) {
+            std::cerr << "[MPC] Failed to generate step targets." << std::endl;
+            return false;
+        }
+    } else if (!buildBarycentricReference(neighbors, current_states, targets)) {
+        std::cerr << "[MPC] Failed to build barycentric follower reference."
+                  << std::endl;
         return false;
     }
     rolling_goal_ = targets.back();  // 终端参考点（s_N 处路径点，可视化用）
@@ -1075,10 +1251,7 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
     // 参考在路径折角处跳 ±π 导致 (ψ-ψ_ref)² 出现尖点/绕远路旋转。进入终点
     // 范围（距全局终点 < yaw_lock_dist_）后冻结参考，避免悬停漂移时"指向
     // 终点"的方位角绕圈导致冗余转头；冻结后由终端 Q_ yaw 软约束保持机头。
-    const Eigen::Vector3d traj_end(global_traj_.back().x,
-                                   global_traj_.back().y,
-                                   global_traj_.back().z);
-    if ((traj_end - cur_pos).norm() > yaw_lock_dist_) {
+    if ((final_goal - cur_pos).norm() > yaw_lock_dist_) {
         const Eigen::Vector3d yaw_ref_vec(rolling_goal_.x - cur_pos.x(),
                                           rolling_goal_.y - cur_pos.y(),
                                           0.0);
@@ -1103,11 +1276,8 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
                      casadi::DM::reshape(DM(reference_values), 4, N_ + 1));
 
     // 终点位置参数（制动约束用）
-    DM goal_dm = DM::zeros(3, 1);
-    goal_dm(0) = global_traj_.back().x;
-    goal_dm(1) = global_traj_.back().y;
-    goal_dm(2) = global_traj_.back().z;
-    opti_->set_value(goal_param_, goal_dm);
+    opti_->set_value(goal_param_, DM(std::vector<double>{
+        final_goal.x(), final_goal.y(), final_goal.z()}));
 
     // 初始状态参数
     vector<double> cur_state_vec(current_states.data(), current_states.data() + 8);
