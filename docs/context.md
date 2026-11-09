@@ -196,3 +196,4 @@
 - `config/formations.yaml`：编队偏移与邻居拓扑（全互连同向邻接，无环全序）。
 - `bag/`：录包；`docs/`：参考论文与实验输出。
 - 构建与运行：`cd ~/catkin_ws && catkin_make && source devel/setup.bash`；单机 `roslaunch form_nav single_test.launch`，编队 `roslaunch form_nav formation_test.launch`。
+- 构建类型默认 `Release`（`CMakeLists.txt` 在未指定 `CMAKE_BUILD_TYPE` 时自动设置）。不要用 `-O0` 运行多机仿真：实测固定场景下全局点云回调由约 24 ms 增至约 4.1 s，A* 由 0.1~0.5 s 增至 2.7~10 s，并会因单线程回调队列积压导致 Rviz 目标延迟数十秒才被处理。

@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.0.2) # 至少用 CMake 3.0.2 
 project(form_nav)                     # 定义这个 CMake 项目的名字为 form_nav
 
+# catkin_make 默认不设置 CMAKE_BUILD_TYPE，所有节点会以 -O0 编译。全局点云
+# 回调与 A* 搜索在未优化构建下慢约两个数量级，10 Hz 点云会堵塞 ROS 单线程
+# 回调队列，使 /move_base_simple/goal 延迟数十秒才被处理；因此默认使用 Release。
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+endif()
+
 add_compile_options(-std=c++17)
 
 # 查找读取包的配置，设置对应的变量和宏，告诉后面编译器和链接器该去哪儿找头文件、库文件
