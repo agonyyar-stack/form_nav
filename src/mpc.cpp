@@ -51,8 +51,8 @@ Mpc::Mpc() {
     yaw_ref_ = 0.0;                              // yaw 参考：由 solve() 按 s_N 方向更新
     yaw_lock_dist_ = 0.3;                        // 终点范围 yaw 冻结距离 (m)
     has_rolling_goal_ = false;
-    // 编队误差权重：与子目标惩罚权重 Q_ 拆分为独立项，默认比 Q_ 小一个数量级
-    Q_f_ = DM::diag(DM{2000, 2000, 1000, 10});
+    // 编队误差权重：与子目标惩罚权重 Q_ 拆分为独立项，只约束位置，yaw 保持自由
+    Q_f_ = DM::diag(DM{50, 50, 25, 0});
     //运动学参数（yaw 与线速度解耦的一阶系统，精确离散化见 updateDiscreteModel）
     tau_v_ = 0.8;   // 线速度一阶时间常数 (s)
     tau_w_ = 0.5;   // 偏航角速度一阶时间常数 (s)
@@ -444,7 +444,12 @@ ErrorTerms Mpc::formationError(int k_step, MX reference_state, std::map<int, MX>
     // 两者不再耦合，避免“编队误差与路径跟踪打架”导致振荡。
     (void)reference_state;
 
-    // 输出
+    // 输出：按邻居数量取平均，避免邻居较多的无人机获得过强的等效编队权重。
+    // 当前拓扑为有向完全图，各节点的邻居数不同；若不归一化，uav1 的编队
+    // 代价约为 uav5 的 5 倍，容易导致各机形成不同的有效 w_form。
+    if (!neighbor_params.empty()) {
+        S1_accum = S1_accum / static_cast<double>(neighbor_params.size());
+    }
     ret.S1       = S1_accum;
     // LMPC 暂未启用。保留接口并提供零占位量，避免将来误调用时使用
     // 未构造的 CasADi 表达式。
@@ -830,7 +835,10 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
             if (k >= 1) {
                 cost += MX::mtimes({subgoal_err.T(), Q_int_, subgoal_err});
             }
-            cost += MX::mtimes({S_f.T(), Q_f_, S_f});
+            // k=0 的状态固定为当前状态，该步编队代价不提供优化梯度，跳过。
+            if (k >= 1) {
+                cost += MX::mtimes({S_f.T(), Q_f_, S_f});
+            }
             
             MX U_k = U(all, k);
             cost += MX::mtimes({U_k.T(), F_, U_k}); // 控制输入惩罚
@@ -927,6 +935,83 @@ bool Mpc::buildOpti(const std::vector<UavState>& neighbors,
     built_ipopt_max_iter_ = ipopt_max_iter_;
     built_ipopt_tol_ = ipopt_tol_;
     has_last_solution_ = false;
+    return true;
+}
+
+// 构造热启动初值。两条路径：
+//   1) 有上一轮解：控制序列整体前移一步（滚动时域下新问题的第 k 步对应上一轮
+//      第 k+1 步，末列没有后继，用上一轮末列零阶保持）；状态序列不直接搬上一
+//      轮的 X，而是用精确离散模型从当前测量状态前推得到，保证 X(0)=当前状态
+//      且 X/U 严格满足动力学，避免给 IPOPT 一个 X 与 U 互相矛盾的初值。
+//   2) 无上一轮解（新全局轨迹、首次求解、Opti 重建后）：用链式参考 targets 的
+//      逐步差分速度反解一阶模型得到线速度指令，构成参考冷启动；yaw 指令置 0，
+//      由终端 yaw 软约束在求解中修正。此前这些情况初值为 CasADi 默认的全零，
+//      会严重违反初始状态等式约束。
+bool Mpc::buildWarmStart(const Eigen::VectorXd& current_states,
+                         const std::vector<GlobalWaypoint>& targets,
+                         Eigen::MatrixXd& out_x, Eigen::MatrixXd& out_u) {
+    if (current_states.size() != 8 || dt_ <= 0.0 ||
+        targets.size() != static_cast<size_t>(N_ + 1)) {
+        return false;
+    }
+
+    out_x = Eigen::MatrixXd::Zero(8, N_ + 1);
+    out_u = Eigen::MatrixXd::Zero(4, N_);
+
+    if (has_last_solution_ && last_u_.rows() == 4 && last_u_.cols() == N_) {
+        // 上一轮控制序列整体前移一列
+        for (int k = 0; k + 1 < N_; ++k) {
+            out_u.col(k) = last_u_.col(k + 1);
+        }
+        if (N_ > 0) {
+            out_u.col(N_ - 1) = last_u_.col(N_ - 1);
+        }
+    } else {
+        // 参考冷启动：用链式参考点做逐步差分估计期望速度，再用与 MPC 相同的
+        // 一阶速度模型反解线速度指令（v_c=(v_des-α·v)/β），并限幅到输入约束，
+        // 使前推出的速度序列尽量贴合梯形剖面；yaw 指令置 0 交给终端软约束。
+        const double alpha_v = std::exp(-dt_ / tau_v_);
+        const double beta_v = K_v_ * (1.0 - alpha_v);
+        Eigen::Vector3d v_state(current_states(4), current_states(5),
+                                current_states(6));
+        auto refVelocity = [&](int idx) -> Eigen::Vector3d {
+            const int i0 = std::max(0, std::min(idx, N_ - 1));
+            const int i1 = std::max(1, std::min(idx + 1, N_));
+            const GlobalWaypoint& a = targets[i0];
+            const GlobalWaypoint& b = targets[i1];
+            return Eigen::Vector3d((b.x - a.x) / dt_, (b.y - a.y) / dt_,
+                                   (b.z - a.z) / dt_);
+        };
+        for (int k = 0; k < N_; ++k) {
+            const Eigen::Vector3d v_des = refVelocity(k + 1);
+            Eigen::Vector3d v_c =
+                beta_v > 1e-9
+                    ? Eigen::Vector3d((v_des - alpha_v * v_state) / beta_v)
+                    : v_des;
+            for (int i = 0; i < 3; ++i) {
+                v_c(i) = std::max(-u_max_, std::min(u_max_, v_c(i)));
+            }
+            out_u.col(k).head<3>() = v_c;
+            v_state = alpha_v * v_state + beta_v * v_c;
+        }
+    }
+
+    // 用精确离散化系数从当前状态前推状态序列（A_、B_ 列优先存储）
+    const std::vector<double> a_elem = A_.get_elements();
+    const std::vector<double> b_elem = B_.get_elements();
+    out_x.col(0) = current_states;
+    for (int k = 0; k < N_; ++k) {
+        for (int i = 0; i < 8; ++i) {
+            double next = 0.0;
+            for (int j = 0; j < 8; ++j) {
+                next += a_elem[i + 8 * j] * out_x(j, k);
+            }
+            for (int j = 0; j < 4; ++j) {
+                next += b_elem[i + 8 * j] * out_u(j, k);
+            }
+            out_x(i, k + 1) = next;
+        }
+    }
     return true;
 }
 
@@ -1075,6 +1160,13 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
     //   非首轮：用上一轮预测轨迹整体前移一列 —— k=0..N-1 取上一轮第 k+1 列
     //           （当前状态 ≈ 上一轮第 1 列），k=N 无对应列，用终端参考点兜底；
     //   首轮（无上一轮解/新轨迹到达）：当前状态位置 → 终端参考点 直线采样 N+1 点。
+    // 热启动初值只在本周期构造一次：有上一轮解则前移一列，否则用链式参考
+    // 冷启动；重规划循环内的后续轮次改用刚解出的轨迹（见循环内逻辑）。
+    Eigen::MatrixXd warm_start_x;
+    Eigen::MatrixXd warm_start_u;
+    const bool has_warm_start =
+        buildWarmStart(current_states, targets, warm_start_x, warm_start_u);
+
     const Eigen::Vector3d goal_pos(rolling_goal_.x, rolling_goal_.y,
                                    rolling_goal_.z);
     auto buildQueryPoints =
@@ -1123,9 +1215,17 @@ bool Mpc::solve(double s0, const std::vector<UavState>& neighbors,
                     6 * static_cast<int>(dyn_obs.size()), N_ + 1));
         }
 
-        // 热启动（上一轮解）
-        if (has_last_solution_ &&
-            last_pred_x_.rows() == 8 && last_pred_x_.cols() == N_ + 1) {
+        // 热启动：首轮用上面构造的初值（上一轮解前移一列 / 参考冷启动）；
+        // 重规划循环内的后续轮次用刚解出的解，保证比循环外的旧解更新。
+        if (iter == 0 && has_warm_start) {
+            std::vector<double> x0_vec(warm_start_x.data(),
+                                       warm_start_x.data() + 8 * (N_ + 1));
+            opti_->set_initial(X, casadi::DM::reshape(DM(x0_vec), 8, N_ + 1));
+            std::vector<double> u0_vec(warm_start_u.data(),
+                                       warm_start_u.data() + 4 * N_);
+            opti_->set_initial(U, casadi::DM::reshape(DM(u0_vec), 4, N_));
+        } else if (has_last_solution_ &&
+                   last_pred_x_.rows() == 8 && last_pred_x_.cols() == N_ + 1) {
             std::vector<double> x0_vec(last_pred_x_.data(),
                                        last_pred_x_.data() + 8 * (N_ + 1));
             opti_->set_initial(X, casadi::DM::reshape(DM(x0_vec), 8, N_ + 1));

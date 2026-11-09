@@ -25,20 +25,20 @@
         <param name="mpc/w_max" value="2.0" />           <!-- 偏航角速度指令上限 (rad/s) -->
         <param name="mpc/drone_radius" value="0.3" />     <!-- 无人机半径 (m) -->
         
-        <param name="mpc/w_form" value="0.0" />        <!-- 编队误差权重-->
+        <param name="mpc/w_form" value="50.0" />       <!-- 编队误差权重（避障优先下的软队形约束）-->
 
-        <param name="mpc/w_subgoal" value="1000.0" />   <!-- 终端子目标惩罚权重 -->
-        <param name="mpc/w_subgoal_int" value="100.0" /> <!-- 中间步子目标惩罚权重（链式逐点参考） -->
+        <param name="mpc/w_subgoal" value="500.0" />   <!-- 终端子目标惩罚权重 -->
+        <param name="mpc/w_subgoal_int" value="0.0" /> <!-- 中间步子目标惩罚权重（链式逐点参考） -->
         <param name="mpc/w_yaw" value="100.0" />        <!-- yaw 参考（子目标方向）软约束权重，复用终端 Q_ -->
         <param name="mpc/yaw_lock_dist" value="0.3" />   <!-- 进入终点范围后冻结 yaw 参考的距离 (m) -->
 
         <param name="mpc/w_ca" value="5.0" />          <!-- 相互碰撞 softplus 势垒强度 M -->
         <param name="mpc/k_ca" value="1.0" />           <!-- 机间避碰 softplus 陡度参数 k -->
         <param name="mpc/d_safe_ca" value="0.2" />     <!-- 编队内安全距离下限 L (m)，有效间距口径，softplus 下参与 d_scale -->
-        <param name="mpc/d_act_ca" value="0.6" />      <!-- 机间避碰势垒中心距离 D̄ (m)，即 softplus 的 d_bar -->
+        <param name="mpc/d_act_ca" value="0.5" />      <!-- 机间避碰势垒中心距离 D̄ (m)，即 softplus 的 d_bar -->
 
         <param name="mpc/w_oa" value="5.0" />            <!-- 静态避障 softplus 势垒强度 M -->
-        <param name="mpc/k_oa" value="1.0" />            <!-- 静态避障 softplus 陡度参数 k -->
+        <param name="mpc/k_oa" value="1.5" />            <!-- 静态避障 softplus 陡度参数 k -->
         <param name="mpc/safe_dist" value="0.1" />       <!-- 距离下限(m) -->
         <param name="mpc/detect_range" value="0.8" />     <!-- 静态障碍物势垒中心距离 d_bar (m)，扣除无人机半径 -->
 

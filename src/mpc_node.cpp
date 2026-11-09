@@ -866,7 +866,7 @@ int main(int argc, char **argv) {
     double d_act_ca  = nh_private.param<double>("mpc/d_act_ca", 1.6);
     double k_ca      = nh_private.param<double>("mpc/k_ca", 100.0);
     double w_ca      = nh_private.param<double>("mpc/w_ca", 200.0);
-    double w_form    = nh_private.param<double>("mpc/w_form", 2000.0);
+    double w_form    = nh_private.param<double>("mpc/w_form", 50.0);
     double w_subgoal = nh_private.param<double>("mpc/w_subgoal", 20000.0);
     double w_yaw     = nh_private.param<double>("mpc/w_yaw", 1000.0);
     double w_subgoal_int = nh_private.param<double>("mpc/w_subgoal_int", 100.0);
@@ -1079,7 +1079,7 @@ int main(int argc, char **argv) {
         DM::diag(DM{w_u, w_u, w_u, w_u}));
     mpc_ptr->setControlIncrementWeight(
         DM::diag(DM{w_du, w_du, w_du, w_du / 4.0}));
-    // 编队误差权重：独立于子目标惩罚权重（默认小一个数量级），
+    // 编队误差权重：独立于子目标惩罚权重，作为避障优先下的软队形约束，
     // yaw 通道恒为 0 —— yaw 只跟踪各自速度/终端参考方向，编队误差不再拉齐机头，
     // 避免与 yaw 参考打架。
     mpc_ptr->setFormationErrorWeight(
